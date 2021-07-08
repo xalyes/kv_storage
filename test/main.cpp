@@ -66,10 +66,21 @@ public:
         valuesOffsets.fill(0);
     }
 
+    Leaf(uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<Offset, MaxKeys>&& newOffsets, std::vector<std::string>&& newValues, FileIndex newNextBatch)
+        : keyCount(newKeyCount)
+        , keys(newKeys)
+        , valuesOffsets(newOffsets)
+        , values(newValues)
+        , nextBatch(newNextBatch)
+    {}
+
     virtual void Load(const std::string& filename);
     virtual void Flush(const std::string& filename);
     void Put(Key key, std::string val);
-    std::string Get(Key key);
+    std::unique_ptr<Leaf> Split(FileIndex nextBatch);
+    std::string Get(Key key) const;
+    uint32_t GetKeyCount() const;
+    Key GetFirstKey() const;
 
 private:
     uint32_t keyCount{ 0 };
@@ -78,6 +89,16 @@ private:
     std::vector<std::string> values;
     FileIndex nextBatch{ 0 };
 };
+
+uint32_t Leaf::GetKeyCount() const
+{
+    return keyCount;
+}
+
+Key Leaf::GetFirstKey() const
+{
+    return keys[0];
+}
 
 void Leaf::Put(Key key, std::string val)
 {
@@ -114,9 +135,12 @@ void Leaf::Put(Key key, std::string val)
                     {
                         valuesOffsets[j] += val.size();
                     }
-
-                    return;
                 }
+                else
+                {
+                    throw std::runtime_error("Try to insert value to fullfilled Leaf");
+                }
+                return;
             }
 
             if (currentKey == key)
@@ -135,7 +159,36 @@ void Leaf::Put(Key key, std::string val)
     }
 }
 
-std::string Leaf::Get(Key key)
+std::unique_ptr<Leaf> Leaf::Split(FileIndex nextBatch)
+{
+    uint32_t copyCount = MaxKeys / 2;
+
+    std::array<Key, MaxKeys> newKeys;
+    newKeys.fill(0);
+    std::array<Offset, MaxKeys> newOffsets;
+    newOffsets.fill(0);
+
+    std::vector<std::string> newValues;
+
+    newValues.insert(newValues.end(), std::make_move_iterator(values.begin() + copyCount + 1),
+        std::make_move_iterator(values.end()));
+    values.erase(values.begin() + copyCount + 1, values.end());
+
+    std::swap(keys[copyCount + 1], newKeys[0]);
+    newOffsets[0] = sizeof(keyCount) + sizeof(keys) + sizeof(valuesOffsets) + 1;
+
+    for (uint32_t i = copyCount + 2; i < MaxKeys; i++)
+    {
+        std::swap(keys[i], newKeys[i - copyCount - 1]);
+
+        newOffsets[i - copyCount - 1] = newOffsets[i - copyCount - 2] + newValues[i - copyCount - 1].size();
+    }
+    
+    keyCount -= copyCount;
+    return std::make_unique<Leaf>(copyCount, std::move(newKeys), std::move(newOffsets), std::move(newValues), nextBatch);
+}
+
+std::string Leaf::Get(Key key) const
 {
     for (size_t i = 0; i < keyCount; i++)
     {
@@ -150,6 +203,13 @@ std::string Leaf::Get(Key key)
 
 struct BPNode
 {
+    BPNode(std::unique_ptr<Node>&& newNode)
+    {
+        isLeaf = false;
+        node = std::move(newNode);
+        leaf.reset();
+    }
+
     BPNode(const std::string& batchFilename)
     {
         std::ifstream in;
@@ -341,8 +401,38 @@ void Volume::Put(const Key& key, const std::string& value)
         }
     }
 
-    current.leaf->Put(key, value);
-    current.leaf->Flush(current.filename);
+    if (current.leaf->GetKeyCount() == MaxKeys)
+    {
+        auto newLeaf = current.leaf->Split(0);
+
+        if (key < newLeaf->GetFirstKey())
+            current.leaf->Put(key, value);
+        else
+            newLeaf->Put(key, value);
+
+        if (current.filename == m_root->filename)
+        {
+            // splitting root
+            auto newRoot = std::make_unique<Node>();
+            newRoot->keyCount = 2;
+            newRoot->keys[0] = current.leaf->GetFirstKey();
+            newRoot->keys[1] = newLeaf->GetFirstKey();
+            newRoot->ptrs[0] = 2;
+            newRoot->ptrs[1] = 3;
+
+            current.leaf->Flush((m_dir / "batch_2.dat").string());
+            newLeaf->Flush((m_dir / "batch_3.dat").string());
+            newRoot->Flush((m_dir / "batch_1.dat").string());
+            m_root = std::make_unique<BPNode>(std::move(newRoot));
+            return;
+        }
+    }
+    else
+    {
+        current.leaf->Put(key, value);
+        current.leaf->Flush(current.filename);
+    }
+
 }
 
 void Volume::Delete(const Key& key)
@@ -412,6 +502,8 @@ BOOST_AUTO_TEST_CASE(FewBatchesTest)
         for (int i = 0; i < MaxKeys; i++)
             s.Put(i, "ololo");
 
+        s.Put(101, "ololo2");
+        
         s.Flush();
 
         for (int i = 0; i < MaxKeys; i++)
