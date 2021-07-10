@@ -7,6 +7,8 @@
 #include <memory>
 #include <iostream>
 #include <filesystem>
+#include <optional>
+#include <regex>
 
 constexpr size_t B = 100;
 constexpr size_t MaxKeys = B - 1;
@@ -14,13 +16,6 @@ using Key = uint64_t;
 using FileIndex = uint64_t;
 
 namespace fs = std::filesystem;
-
-class IBatch
-{
-public:
-    virtual void Load(const std::string& filename) = 0;
-    virtual void Flush(const std::string& filename) = 0;
-};
 
 template<class T, size_t N>
 void InsertToArray(std::array<T, N>& arr, size_t pos, T val)
@@ -38,100 +33,336 @@ void InsertToArray(std::array<T, N>& arr, size_t pos, T val)
     arr[pos] = val;
 }
 
-class Node : public IBatch
+template<class T, size_t N>
+void RemoveFromArray(std::array<T, N>& arr, size_t pos)
+{
+    if (pos > arr.size())
+        throw std::runtime_error("Invalid position for removing from std array");
+
+    arr[pos] = 0;
+    if (pos != arr.max_size() - 1)
+    {
+        for (size_t i = pos; i < arr.max_size(); i++)
+        {
+            std::swap(arr[i], arr[i + 1]);
+        }
+    }
+}
+
+class CreatedBPNode;
+
+class BPNode
 {
 public:
-    Node()
+    BPNode(const fs::path& dir, FileIndex idx)
+        : m_dir(dir)
+        , m_index(idx)
     {
-        keys.fill(0);
+        m_keys.fill(0);
+    }
+
+    BPNode(const fs::path& dir, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys)
+        : m_dir(dir)
+        , m_index(idx)
+        , m_keyCount(newKeyCount)
+        , m_keys(newKeys)
+    {}
+
+    virtual ~BPNode() = default;
+
+    virtual void Load() = 0;
+    virtual void Flush() = 0;
+    virtual std::optional<CreatedBPNode> Put(Key key, const std::string& value, FileIndex& nodesCount, bool isRoot) = 0;
+    virtual std::string Get(Key key) const = 0;
+    virtual uint32_t GetKeyCount() const;
+    virtual Key GetFirstKey() const;
+    virtual FileIndex GetIndex() const;
+
+protected:
+    const fs::path m_dir;
+    FileIndex m_index{ 0 };
+    uint32_t m_keyCount{ 0 };
+    std::array<Key, MaxKeys> m_keys;
+};
+
+// ptr to new created BPNode & key to be inserted to parent node
+class CreatedBPNode
+{
+public:
+    std::unique_ptr<BPNode> node;
+    Key key;
+};
+
+uint32_t BPNode::GetKeyCount() const
+{
+    return m_keyCount;
+}
+
+Key BPNode::GetFirstKey() const
+{
+    return m_keys[0];
+}
+
+FileIndex BPNode::GetIndex() const
+{
+    return m_index;
+}
+
+class Node : public BPNode
+{
+public:
+    Node(const fs::path& dir, FileIndex idx)
+        : BPNode(dir, idx)
+    {
         ptrs.fill(0);
     }
 
-    virtual void Load(const std::string& filename);
-    virtual void Flush(const std::string& filename);
+    Node(const fs::path& dir, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<FileIndex, B>&& newPtrs)
+        : BPNode(dir, idx, newKeyCount, std::move(newKeys))
+        , ptrs(newPtrs)
+    {}
+
+    virtual void Load() override;
+    virtual void Flush() override;
+    virtual std::optional<CreatedBPNode> Put(Key key, const std::string& value, FileIndex& nodesCount, bool isRoot) override;
+    std::string Get(Key key) const override;
 
 public:
-    uint32_t keyCount{ 0 };
-    std::array<Key, MaxKeys> keys;
     std::array<FileIndex, B> ptrs;
 };
 
 using Offset = uint64_t;
-class Leaf : public IBatch
+class Leaf : public BPNode
 {
 public:
-    Leaf()
+    Leaf(const fs::path& dir, FileIndex idx)
+        : BPNode(dir, idx)
     {
-        keys.fill(0);
         valuesOffsets.fill(0);
     }
 
-    Leaf(uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<Offset, MaxKeys>&& newOffsets, std::vector<std::string>&& newValues, FileIndex newNextBatch)
-        : keyCount(newKeyCount)
-        , keys(newKeys)
+    Leaf(const fs::path& dir, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<Offset, MaxKeys>&& newOffsets, std::vector<std::string>&& newValues, FileIndex newNextBatch)
+        : BPNode(dir, idx, newKeyCount, std::move(newKeys))
         , valuesOffsets(newOffsets)
         , values(newValues)
         , nextBatch(newNextBatch)
     {}
 
-    virtual void Load(const std::string& filename);
-    virtual void Flush(const std::string& filename);
-    void Put(Key key, std::string val);
-    std::unique_ptr<Leaf> Split(FileIndex nextBatch);
-    std::string Get(Key key) const;
-    uint32_t GetKeyCount() const;
-    Key GetFirstKey() const;
+    virtual void Load() override;
+    virtual void Flush() override;
+    virtual std::optional<CreatedBPNode> Put(Key key, const std::string& val, FileIndex& nodesCount, bool isRoot) override;
+    CreatedBPNode SplitAndPut(Key key, const std::string& value, FileIndex nextBatch, FileIndex& nodesCount);
+    std::string Get(Key key) const override;
 
 private:
-    uint32_t keyCount{ 0 };
-    std::array<Key, MaxKeys> keys;
     std::array<Offset, MaxKeys> valuesOffsets;
     std::vector<std::string> values;
     FileIndex nextBatch{ 0 };
 };
 
-uint32_t Leaf::GetKeyCount() const
+std::unique_ptr<BPNode> CreateEmptyBPNode(const fs::path& dir, FileIndex idx)
 {
-    return keyCount;
+    return std::make_unique<Leaf>(dir, idx);
 }
 
-Key Leaf::GetFirstKey() const
+std::unique_ptr<BPNode> CreateBPNode(const fs::path& dir, FileIndex idx)
 {
-    return keys[0];
-}
+    std::ifstream in;
+    in.exceptions(~std::ifstream::goodbit);
+    in.open(fs::path(dir) / ("batch_" + std::to_string(idx) + ".dat"), std::ios::in | std::ios::binary);
 
-void Leaf::Put(Key key, std::string val)
-{
-    if (keyCount == 0)
+    char type;
+    in.read(&type, 1);
+
+    // TODO: reuse ifstream instead of closing
+    if (type == '8')
     {
-        InsertToArray(keys, 0, key);
-
-        values.push_back(val);
-        InsertToArray(valuesOffsets, 0, sizeof(keyCount) + sizeof(keys) + sizeof(valuesOffsets) + 1);
-
-        keyCount++;
+        in.close();
+        auto node = std::make_unique<Node>(dir, idx);
+        node->Load();
+        return node;
+    }
+    else if (type == '9')
+    {
+        in.close();
+        auto leaf = std::make_unique<Leaf>(dir, idx);
+        leaf->Load();
+        return leaf;
     }
     else
     {
-        for (size_t i = 0; i < keyCount; i++)
+        throw std::runtime_error("Invalid file format");
+    }
+}
+
+std::string Node::Get(Key key) const
+{
+    std::unique_ptr<BPNode> foundChild;
+    uint32_t childPos = m_keyCount;
+
+    // TODO: binary search may be?
+    for (uint32_t i = 0; i < m_keyCount; i++)
+    {
+        if (key < m_keys[i])
         {
-            auto currentKey = keys[i];
+            // TODO: Impl some cache for loaded batches
+            foundChild = CreateBPNode(m_dir, ptrs[i]);
+            childPos = i;
+            break;
+        }
+    }
+
+    if (!foundChild)
+        foundChild = CreateBPNode(m_dir, ptrs[m_keyCount]);
+
+    return foundChild->Get(key);
+}
+
+std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIndex& nodesCount, bool isRoot)
+{
+    std::unique_ptr<BPNode> foundChild;
+    uint32_t childPos = m_keyCount;
+
+    // TODO: binary search may be?
+    for (uint32_t i = 0; i < m_keyCount; i++)
+    {
+        if (key < m_keys[i])
+        {
+            // TODO: Impl some cache for loaded batches
+            foundChild = CreateBPNode(m_dir, ptrs[i]);
+            childPos = i;
+            break;
+        }
+    }
+
+    if (!foundChild)
+        foundChild = CreateBPNode(m_dir, ptrs[m_keyCount]);
+
+    auto newNode = foundChild->Put(key, value, nodesCount, false);
+    if (!newNode)
+    {
+        return std::nullopt;
+    }
+    // Child splitted
+
+    if (m_keyCount == MaxKeys)
+    {
+        // Must split this node
+        uint32_t copyCount = MaxKeys / 2;
+
+        std::array<Key, MaxKeys> newKeys;
+        newKeys.fill(0);
+        std::array<FileIndex, B> newPtrs;
+        newPtrs.fill(0);
+
+        std::vector<std::string> newValues;
+
+        std::swap(m_keys[copyCount + 1], newKeys[0]);
+        std::swap(ptrs[copyCount + 1], newPtrs[0]);
+
+        for (uint32_t i = copyCount + 2; i < MaxKeys; i++)
+        {
+            std::swap(m_keys[i], newKeys[i - copyCount - 1]);
+            std::swap(ptrs[i], newPtrs[i - copyCount - 1]);
+        }
+
+        m_keyCount -= copyCount;
+
+        const auto insert = [](uint32_t& count, std::array<Key, MaxKeys>& keys, std::array<FileIndex, B>& ptrs, Key newKey, FileIndex newIdx)
+        {
+            for (uint32_t i = 0; i < count; i++)
+            {
+                auto currentKey = keys[i];
+
+                if (newKey > currentKey)
+                    continue;
+
+                InsertToArray(keys, i, newKey);
+                InsertToArray(ptrs, i, newIdx);
+                count++;
+                return;
+            }
+
+            InsertToArray(keys, count, newKey);
+            InsertToArray(ptrs, count, newIdx);
+            count++;
+        };
+
+        Key firstNewKey = newNode.value().key;
+        if (key < firstNewKey)
+        {
+            // insert to this
+            insert(m_keyCount, m_keys, ptrs, firstNewKey, newNode.value().node->GetIndex());
+        }
+        else
+        {
+            // insert to new node
+            insert(copyCount, newKeys, newPtrs, firstNewKey, newNode.value().node->GetIndex());
+        }
+
+        auto keyToDelete = newKeys[0];
+        RemoveFromArray(newKeys, 0);
+        RemoveFromArray(newPtrs, 0);
+
+        auto newNode = std::make_unique<Node>(m_dir, ++nodesCount, copyCount, std::move(newKeys), std::move(newPtrs));
+
+        if (isRoot)
+            m_index = ++nodesCount;
+
+        newNode->Flush();
+        Flush();
+
+        return std::optional<CreatedBPNode>({ std::move(newNode), keyToDelete });
+    }
+    else
+    {
+        InsertToArray(m_keys, childPos, newNode.value().node->GetFirstKey());
+        InsertToArray(ptrs, childPos, newNode.value().node->GetIndex());
+        Flush();
+        return std::nullopt;
+    }
+}
+
+std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileIndex& nodesCount, bool isRoot)
+{
+    if (m_keyCount == MaxKeys)
+    {
+        if (isRoot)
+            m_index = ++nodesCount;
+
+        return SplitAndPut(key, val, nextBatch, nodesCount);
+    }
+
+    if (m_keyCount == 0)
+    {
+        InsertToArray(m_keys, 0, key);
+
+        values.push_back(val);
+        InsertToArray(valuesOffsets, 0, sizeof(m_keyCount) + sizeof(m_keys) + sizeof(valuesOffsets) + 1);
+
+        m_keyCount++;
+    }
+    else
+    {
+        for (size_t i = 0; i < m_keyCount; i++)
+        {
+            auto currentKey = m_keys[i];
 
             if (key < currentKey)
             {
-                if (keyCount != MaxKeys)
+                if (m_keyCount != MaxKeys)
                 {
-                    InsertToArray(keys, i, key);
+                    InsertToArray(m_keys, i, key);
 
                     values.insert(values.begin()+i, val);
                     if (i != 0)
                         InsertToArray(valuesOffsets, i, valuesOffsets[i - 1] + values[i - 1].size());
                     else
-                        InsertToArray(valuesOffsets, 0, sizeof(keyCount) + sizeof(keys) + sizeof(valuesOffsets) + 1);
+                        InsertToArray(valuesOffsets, 0, sizeof(m_keyCount) + sizeof(m_keys) + sizeof(valuesOffsets) + 1);
 
-                    keyCount++;
+                    m_keyCount++;
 
-                    for (size_t j = i + 1; j < keyCount; j++)
+                    for (size_t j = i + 1; j < m_keyCount; j++)
                     {
                         valuesOffsets[j] += val.size();
                     }
@@ -140,7 +371,8 @@ void Leaf::Put(Key key, std::string val)
                 {
                     throw std::runtime_error("Try to insert value to fullfilled Leaf");
                 }
-                return;
+                Flush();
+                return std::nullopt;
             }
 
             if (currentKey == key)
@@ -149,17 +381,19 @@ void Leaf::Put(Key key, std::string val)
             }
         }
 
-        size_t i = keyCount;
-        keys[i] = key;
+        size_t i = m_keyCount;
+        m_keys[i] = key;
 
         values.push_back(val);
         valuesOffsets[i] = valuesOffsets[i - 1] + values[i - 1].size();
 
-        keyCount++;
+        m_keyCount++;
     }
+    Flush();
+    return std::nullopt;
 }
 
-std::unique_ptr<Leaf> Leaf::Split(FileIndex nextBatch)
+CreatedBPNode Leaf::SplitAndPut(Key key, const std::string& value, FileIndex nextBatch, FileIndex& nodesCount)
 {
     uint32_t copyCount = MaxKeys / 2;
 
@@ -174,25 +408,41 @@ std::unique_ptr<Leaf> Leaf::Split(FileIndex nextBatch)
         std::make_move_iterator(values.end()));
     values.erase(values.begin() + copyCount + 1, values.end());
 
-    std::swap(keys[copyCount + 1], newKeys[0]);
-    newOffsets[0] = sizeof(keyCount) + sizeof(keys) + sizeof(valuesOffsets) + 1;
+    std::swap(m_keys[copyCount + 1], newKeys[0]);
+    newOffsets[0] = sizeof(m_keyCount) + sizeof(m_keys) + sizeof(valuesOffsets) + 1;
 
     for (uint32_t i = copyCount + 2; i < MaxKeys; i++)
     {
-        std::swap(keys[i], newKeys[i - copyCount - 1]);
+        std::swap(m_keys[i], newKeys[i - copyCount - 1]);
 
         newOffsets[i - copyCount - 1] = newOffsets[i - copyCount - 2] + newValues[i - copyCount - 1].size();
     }
     
-    keyCount -= copyCount;
-    return std::make_unique<Leaf>(copyCount, std::move(newKeys), std::move(newOffsets), std::move(newValues), nextBatch);
+    m_keyCount -= copyCount;
+
+    Key firstNewKey = newKeys[0];
+
+    auto newLeaf = std::make_unique<Leaf>(m_dir, ++nodesCount, copyCount, std::move(newKeys), std::move(newOffsets), std::move(newValues), nextBatch);
+
+    if (key < firstNewKey)
+    {
+        Put(key, value, nodesCount, false);
+        newLeaf->Flush();
+    }
+    else
+    {
+        Flush();
+        newLeaf->Put(key, value, nodesCount, false);
+    }
+
+    return { std::move(newLeaf), firstNewKey };
 }
 
 std::string Leaf::Get(Key key) const
 {
-    for (size_t i = 0; i < keyCount; i++)
+    for (size_t i = 0; i < m_keyCount; i++)
     {
-        if (keys[i] == key)
+        if (m_keys[i] == key)
         {
             return values[i];
         }
@@ -201,108 +451,54 @@ std::string Leaf::Get(Key key) const
     throw std::runtime_error("Failed to get unexisted value of key");
 }
 
-struct BPNode
-{
-    BPNode(std::unique_ptr<Node>&& newNode)
-    {
-        isLeaf = false;
-        node = std::move(newNode);
-        leaf.reset();
-    }
-
-    BPNode(const std::string& batchFilename)
-    {
-        std::ifstream in;
-        in.open(batchFilename, std::ios::in | std::ios::binary | std::ios::ate);
-        if (!in.good())
-        {
-            leaf = std::make_unique<Leaf>();
-            isLeaf = true;
-            filename = batchFilename;
-            return;
-        }
-
-        in.exceptions(~std::ifstream::goodbit);
-
-        in.seekg(0);
-        char type;
-        in.read(&type, 1);
-
-        // TODO: reuse ifstream instead of closing
-        if (type == '8')
-        {
-            in.close();
-            node = std::make_unique<Node>();
-            node->Load(batchFilename);
-            isLeaf = false;
-        }
-        else if (type == '9')
-        {
-            in.close();
-            leaf = std::make_unique<Leaf>();
-            leaf->Load(batchFilename);
-            isLeaf = true;
-        }
-        else
-        {
-            throw std::runtime_error("Invalid file format");
-        }
-
-        filename = batchFilename;
-    }
-
-    std::string filename;
-    bool isLeaf;
-    std::unique_ptr<Node> node;
-    std::unique_ptr<Leaf> leaf;
-};
-
-void Node::Load(const std::string& filename)
+void Node::Load()
 {
     std::ifstream in;
     in.exceptions(~std::ofstream::goodbit);
-    in.open(filename, std::ios::in | std::ios::binary);
+    in.open(m_dir / ("batch_" + std::to_string(m_index) + ".dat"), std::ios::in | std::ios::binary);
 
     // TODO: check first char is 11
     in.seekg(1);
 
-    in.read(reinterpret_cast<char*>(&(keyCount)), sizeof(keyCount));
-    in.read(reinterpret_cast<char*>(&(keys)), sizeof(keys));
+    in.read(reinterpret_cast<char*>(&(m_keyCount)), sizeof(m_keyCount));
+    in.read(reinterpret_cast<char*>(&(m_keys)), sizeof(m_keys));
     in.read(reinterpret_cast<char*>(&(ptrs)), sizeof(ptrs));
 }
 
-void Node::Flush(const std::string& filename)
+void Node::Flush()
 {
     std::ofstream out;
     out.exceptions(~std::ofstream::goodbit);
-    out.open(filename, std::ios::out | std::ios::binary | std::ios::trunc);
+    out.open(m_dir / ("batch_" + std::to_string(m_index) + ".dat"), std::ios::out | std::ios::binary | std::ios::trunc);
 
-    out.write(reinterpret_cast<char*>(&(keyCount)), sizeof(keyCount));
-    out.write(reinterpret_cast<char*>(&(keys)), sizeof(keys));
+    out.write("8", 1);
+
+    out.write(reinterpret_cast<char*>(&(m_keyCount)), sizeof(m_keyCount));
+    out.write(reinterpret_cast<char*>(&(m_keys)), sizeof(m_keys));
     out.write(reinterpret_cast<char*>(&(ptrs)), sizeof(ptrs));
 }
 
-void Leaf::Load(const std::string& filename)
+void Leaf::Load()
 {
     std::ifstream in;
     in.exceptions(~std::ofstream::goodbit);
-    in.open(filename, std::ios::in | std::ios::binary | std::ios::ate);
+    in.open(m_dir / ("batch_" + std::to_string(m_index) + ".dat"), std::ios::in | std::ios::binary | std::ios::ate);
 
     uint64_t filesize = in.tellg();
 
     // TODO: check first char is 22
     in.seekg(1);
 
-    in.read(reinterpret_cast<char*>(&(keyCount)), sizeof(keyCount));
-    in.read(reinterpret_cast<char*>(&(keys)), sizeof(keys));
+    in.read(reinterpret_cast<char*>(&(m_keyCount)), sizeof(m_keyCount));
+    in.read(reinterpret_cast<char*>(&(m_keys)), sizeof(m_keys));
     in.read(reinterpret_cast<char*>(&(valuesOffsets)), sizeof(valuesOffsets));
 
-    for (uint64_t i = 0; i < keyCount; i++)
+    for (uint64_t i = 0; i < m_keyCount; i++)
     {
         auto offset = valuesOffsets[i];
         uint64_t endOffset;
 
-        if (i == keyCount - 1)
+        if (i == m_keyCount - 1)
             endOffset = filesize - sizeof(nextBatch);
         else
             endOffset = valuesOffsets[i + 1];
@@ -318,15 +514,15 @@ void Leaf::Load(const std::string& filename)
     in.read(reinterpret_cast<char*>(&(nextBatch)), sizeof(nextBatch));
 }
 
-void Leaf::Flush(const std::string& filename)
+void Leaf::Flush()
 {
     std::ofstream out;
     out.exceptions(~std::ofstream::goodbit);
-    out.open(filename, std::ios::out | std::ios::binary | std::ios::trunc);
+    out.open(m_dir / ("batch_" + std::to_string(m_index) + ".dat"), std::ios::out | std::ios::binary | std::ios::trunc);
 
     out.write("9", 1);
-    out.write(reinterpret_cast<char*>(&(keyCount)), sizeof(keyCount));
-    out.write(reinterpret_cast<char*>(&(keys)), sizeof(keys));
+    out.write(reinterpret_cast<char*>(&(m_keyCount)), sizeof(m_keyCount));
+    out.write(reinterpret_cast<char*>(&(m_keys)), sizeof(m_keys));
     out.write(reinterpret_cast<char*>(&(valuesOffsets)), sizeof(valuesOffsets));
 
     for (const auto& v : values)
@@ -343,96 +539,53 @@ public:
     Volume(const fs::path& path)
         : m_dir(path)
     {
-        fs::create_directories(path);
+        if (!fs::exists(m_dir / "batch_1.dat"))
+        {
+            fs::create_directories(path);
+            m_root = CreateEmptyBPNode(m_dir, 1);
+            m_nodesCount = 1;
+        }
+        else
+        {
+            m_root = CreateBPNode(m_dir, 1);
+
+            const auto batchFileFormat = std::regex("batch_\\d+\\.dat");
+            m_nodesCount = std::count_if(fs::directory_iterator(m_dir), fs::directory_iterator{},
+                [&batchFileFormat](const fs::path& p)
+                {
+                    return std::regex_match(p.filename().string(), batchFileFormat);
+                }
+            );
+        }
     }
 
     void Put(const Key& key, const std::string& value);
     void Delete(const Key& key);
     std::string Get(const Key& key);
-    void Flush();
-    void Load();
 
 private:
     std::unique_ptr<BPNode> m_root;
     const fs::path m_dir;
+    FileIndex m_nodesCount;
 };
-
-void Volume::Flush()
-{
-    m_root->leaf->Flush(m_root->filename);
-}
-
-void Volume::Load()
-{
-    m_root = std::make_unique<BPNode>((m_dir / "batch_1.dat").string());
-}
 
 void Volume::Put(const Key& key, const std::string& value)
 {
-    if (!m_root)
-    {
-        m_root = std::make_unique<BPNode>((m_dir / "batch_1.dat").string());
-
-        m_root->leaf->Put(key, value);
-        m_root->leaf->Flush(m_root->filename);
+    auto newNode = m_root->Put(key, value, m_nodesCount, true);
+    if (!newNode)
         return;
-    }
 
-    BPNode& current = *m_root;
-    while (!current.isLeaf)
-    {
-        bool found = false;
-        // TODO: binary search may be?
-        Node& node = *current.node;
-        for (uint32_t i = 0; i < node.keyCount; i++)
-        {
-            if (key <= node.keys[i])
-            {
-                // TODO: Impl some cache for loaded batches
-                current = BPNode("batch_" + std::to_string(node.ptrs[i]) + ".dat");
-                found = true;
-                break;
-            }
-        }
+    std::array<Key, MaxKeys> keys;
+    keys.fill(0);
+    std::array<FileIndex, B> ptrs;
+    ptrs.fill(0);
 
-        if (!found)
-        {
-            current = BPNode("batch_" + std::to_string(node.ptrs[node.keyCount]) + ".dat");
-        }
-    }
+    keys[0] = newNode.value().key;
+    ptrs[0] = m_root->GetIndex();
+    ptrs[1] = newNode.value().node->GetIndex();
 
-    if (current.leaf->GetKeyCount() == MaxKeys)
-    {
-        auto newLeaf = current.leaf->Split(0);
-
-        if (key < newLeaf->GetFirstKey())
-            current.leaf->Put(key, value);
-        else
-            newLeaf->Put(key, value);
-
-        if (current.filename == m_root->filename)
-        {
-            // splitting root
-            auto newRoot = std::make_unique<Node>();
-            newRoot->keyCount = 2;
-            newRoot->keys[0] = current.leaf->GetFirstKey();
-            newRoot->keys[1] = newLeaf->GetFirstKey();
-            newRoot->ptrs[0] = 2;
-            newRoot->ptrs[1] = 3;
-
-            current.leaf->Flush((m_dir / "batch_2.dat").string());
-            newLeaf->Flush((m_dir / "batch_3.dat").string());
-            newRoot->Flush((m_dir / "batch_1.dat").string());
-            m_root = std::make_unique<BPNode>(std::move(newRoot));
-            return;
-        }
-    }
-    else
-    {
-        current.leaf->Put(key, value);
-        current.leaf->Flush(current.filename);
-    }
-
+    m_root = std::make_unique<Node>(m_dir, 1, 1, std::move(keys), std::move(ptrs));
+    m_root->Flush();
 }
 
 void Volume::Delete(const Key& key)
@@ -442,30 +595,7 @@ void Volume::Delete(const Key& key)
 
 std::string Volume::Get(const Key& key)
 {
-    BPNode& current = *m_root;
-    while (!current.isLeaf)
-    {
-        bool found = false;
-        // TODO: binary search may be?
-        Node& node = *current.node;
-        for (uint32_t i = 0; i < node.keyCount; i++)
-        {
-            if (key <= node.keys[i])
-            {
-                // TODO: Impl some cache for loaded batches
-                current = BPNode("batch_" + std::to_string(node.ptrs[i]) + ".dat");
-                found = true;
-                break;
-            }
-        }
-
-        if (!found)
-        {
-            current = BPNode("batch_" + std::to_string(node.ptrs[node.keyCount]) + ".dat");
-        }
-    }
-
-    return current.leaf->Get(key);
+    return m_root->Get(key);
 }
 
 BOOST_AUTO_TEST_CASE(BasicTest)
@@ -482,11 +612,9 @@ BOOST_AUTO_TEST_CASE(BasicTest)
 
         BOOST_TEST(s.Get(33) == "ololo");
         BOOST_TEST(s.Get(44) == "ololo2");
-        s.Flush();
     }
     
     Volume s(volumeDir);
-    s.Load();
 
     BOOST_TEST(s.Get(33) == "ololo");
     BOOST_TEST(s.Get(44) == "ololo2");
@@ -503,15 +631,12 @@ BOOST_AUTO_TEST_CASE(FewBatchesTest)
             s.Put(i, "ololo");
 
         s.Put(101, "ololo2");
-        
-        s.Flush();
 
         for (int i = 0; i < MaxKeys; i++)
             BOOST_TEST(s.Get(i) == "ololo");
     }
 
     Volume s(volumeDir);
-    s.Load();
 
     for (int i = 0; i < MaxKeys; i++)
         BOOST_TEST(s.Get(i) == "ololo");
