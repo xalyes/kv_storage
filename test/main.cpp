@@ -9,6 +9,10 @@
 #include <filesystem>
 #include <optional>
 #include <regex>
+#include <limits>
+#include <random>
+#include <fstream>
+#include <set>
 
 constexpr size_t B = 100;
 constexpr size_t MaxKeys = B - 1;
@@ -42,7 +46,7 @@ void RemoveFromArray(std::array<T, N>& arr, size_t pos)
     arr[pos] = 0;
     if (pos != arr.max_size() - 1)
     {
-        for (size_t i = pos; i < arr.max_size(); i++)
+        for (size_t i = pos; i < arr.max_size() - 1; i++)
         {
             std::swap(arr[i], arr[i + 1]);
         }
@@ -255,15 +259,15 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
         std::array<FileIndex, B> newPtrs;
         newPtrs.fill(0);
 
-        std::vector<std::string> newValues;
+        uint32_t borderIndex = MaxKeys - copyCount;
 
-        std::swap(m_keys[copyCount + 1], newKeys[0]);
-        std::swap(ptrs[copyCount + 1], newPtrs[0]);
+        std::swap(m_keys[borderIndex], newKeys[0]);
+        std::swap(ptrs[borderIndex + 1], newPtrs[0]);
 
-        for (uint32_t i = copyCount + 2; i < MaxKeys; i++)
+        for (uint32_t i = borderIndex + 1; i < MaxKeys; i++)
         {
-            std::swap(m_keys[i], newKeys[i - copyCount - 1]);
-            std::swap(ptrs[i], newPtrs[i - copyCount - 1]);
+            std::swap(m_keys[i], newKeys[i - borderIndex]);
+            std::swap(ptrs[i + 1], newPtrs[i - borderIndex]);
         }
 
         m_keyCount -= copyCount;
@@ -274,7 +278,7 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
             {
                 auto currentKey = keys[i];
 
-                if (newKey > currentKey)
+                if (newKey >= currentKey)
                     continue;
 
                 InsertToArray(keys, i, newKey);
@@ -289,10 +293,30 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
         };
 
         Key firstNewKey = newNode.value().key;
-        if (key < firstNewKey)
+        if (key < newKeys[0])
         {
+            bool found = false;
             // insert to this
-            insert(m_keyCount, m_keys, ptrs, firstNewKey, newNode.value().node->GetIndex());
+            for (uint32_t i = 0; i < m_keyCount; i++)
+            {
+                auto currentKey = m_keys[i];
+
+                if (firstNewKey >= currentKey)
+                    continue;
+
+                InsertToArray(m_keys, i, firstNewKey);
+                InsertToArray(ptrs, i + 1, newNode.value().node->GetIndex());
+                m_keyCount++;
+                found = true;
+                break;
+            }
+
+            if (!found)
+            {
+                InsertToArray(m_keys, m_keyCount, firstNewKey);
+                InsertToArray(ptrs, m_keyCount + 1, newNode.value().node->GetIndex());
+                m_keyCount++;
+            }
         }
         else
         {
@@ -302,7 +326,7 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
 
         auto keyToDelete = newKeys[0];
         RemoveFromArray(newKeys, 0);
-        RemoveFromArray(newPtrs, 0);
+        copyCount--;
 
         auto newNode = std::make_unique<Node>(m_dir, ++nodesCount, copyCount, std::move(newKeys), std::move(newPtrs));
 
@@ -316,8 +340,24 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
     }
     else
     {
-        InsertToArray(m_keys, childPos, newNode.value().node->GetFirstKey());
-        InsertToArray(ptrs, childPos, newNode.value().node->GetIndex());
+        Key keyForInsert = newNode.value().key;
+
+        for (uint32_t i = 0; i < m_keyCount; i++)
+        {
+            if (keyForInsert < m_keys[i])
+            {
+                InsertToArray(m_keys, i, keyForInsert);
+                InsertToArray(ptrs, i + 1, newNode.value().node->GetIndex());
+                m_keyCount++;
+                Flush();
+                return std::nullopt;
+            }
+        }
+
+        InsertToArray(m_keys, m_keyCount, keyForInsert);
+        InsertToArray(ptrs, m_keyCount + 1, newNode.value().node->GetIndex());
+        m_keyCount++;
+
         Flush();
         return std::nullopt;
     }
@@ -404,18 +444,20 @@ CreatedBPNode Leaf::SplitAndPut(Key key, const std::string& value, FileIndex nex
 
     std::vector<std::string> newValues;
 
-    newValues.insert(newValues.end(), std::make_move_iterator(values.begin() + copyCount + 1),
-        std::make_move_iterator(values.end()));
-    values.erase(values.begin() + copyCount + 1, values.end());
+    uint32_t borderIndex = values.size() - copyCount;
 
-    std::swap(m_keys[copyCount + 1], newKeys[0]);
+    newValues.insert(newValues.end(), std::make_move_iterator(values.begin() + borderIndex),
+        std::make_move_iterator(values.end()));
+    values.erase(values.begin() + borderIndex, values.end());
+
+    std::swap(m_keys[borderIndex], newKeys[0]);
     newOffsets[0] = sizeof(m_keyCount) + sizeof(m_keys) + sizeof(valuesOffsets) + 1;
 
-    for (uint32_t i = copyCount + 2; i < MaxKeys; i++)
+    for (uint32_t i = borderIndex + 1; i < MaxKeys; i++)
     {
-        std::swap(m_keys[i], newKeys[i - copyCount - 1]);
+        std::swap(m_keys[i], newKeys[i - borderIndex]);
 
-        newOffsets[i - copyCount - 1] = newOffsets[i - copyCount - 2] + newValues[i - copyCount - 1].size();
+        newOffsets[i - borderIndex] = newOffsets[i - borderIndex - 1] + newValues[i - borderIndex - 1].size();
     }
     
     m_keyCount -= copyCount;
@@ -448,7 +490,7 @@ std::string Leaf::Get(Key key) const
         }
     }
 
-    throw std::runtime_error("Failed to get unexisted value of key");
+    throw std::runtime_error("Failed to get unexisted value of key '" + std::to_string(key) + "'");
 }
 
 void Node::Load()
@@ -509,6 +551,7 @@ void Leaf::Load()
         in.read(buf.get(), size);
         buf.get()[size] = '\0';
         values.emplace_back(buf.get());
+        //std::cout << "Reading " << buf << std::endl;
     }
 
     in.read(reinterpret_cast<char*>(&(nextBatch)), sizeof(nextBatch));
@@ -528,6 +571,7 @@ void Leaf::Flush()
     for (const auto& v : values)
     {
         out.write(v.data(), v.size());
+        //std::cout << "Writing " << v << std::endl;
     }
 
     out.write(reinterpret_cast<char*>(&(nextBatch)), sizeof(nextBatch));
@@ -625,19 +669,41 @@ BOOST_AUTO_TEST_CASE(FewBatchesTest)
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);
 
+    std::set<std::string> keys;
+
     {
         Volume s(volumeDir);
-        for (int i = 0; i < MaxKeys; i++)
-            s.Put(i, "ololo");
 
-        s.Put(101, "ololo2");
+        std::random_device rd;
+        const uint32_t seed = rd();
+        std::cout << "seed: " << seed << std::endl;
+        std::mt19937 rng(seed);
+        std::uniform_int_distribution<uint64_t> uni(1, 25);
 
-        for (int i = 0; i < MaxKeys; i++)
-            BOOST_TEST(s.Get(i) == "ololo");
+        for (int i = 0; i < 10000; i++)
+        {
+            auto key = std::string(uni(rng), 'a') + std::to_string(i);
+            keys.insert(key);
+            s.Put(i, key);
+        }
+
+        for (int i = 19999; i >= 10000; i--)
+        {
+            auto key = std::string(uni(rng), 'a') + std::to_string(i);
+            keys.insert(key);
+            s.Put(i, key);
+        }
+
+        for (int i = 0; i < 20000; i++)
+        {
+            BOOST_TEST(keys.count(s.Get(i)) == 1);
+        }
     }
 
     Volume s(volumeDir);
 
-    for (int i = 0; i < MaxKeys; i++)
-        BOOST_TEST(s.Get(i) == "ololo");
+    for (int i = 0; i < 20000; i++)
+    {
+        BOOST_TEST(keys.count(s.Get(i)) == 1);
+    }
 }
