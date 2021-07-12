@@ -28,7 +28,7 @@ std::string Node::Get(Key key) const
     return foundChild->Get(key);
 }
 
-std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIndex& nodesCount, bool isRoot)
+std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIndex& nodesCount)
 {
     std::unique_ptr<BPNode> foundChild;
     uint32_t childPos = m_keyCount;
@@ -48,7 +48,7 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
     if (!foundChild)
         foundChild = CreateBPNode(m_dir, ptrs[m_keyCount]);
 
-    auto newNode = foundChild->Put(key, value, nodesCount, false);
+    auto newNode = foundChild->Put(key, value, nodesCount);
     if (!newNode)
     {
         return std::nullopt;
@@ -136,7 +136,7 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
 
         auto newNode = std::make_unique<Node>(m_dir, ++nodesCount, copyCount, std::move(newKeys), std::move(newPtrs));
 
-        if (isRoot)
+        if (m_index == 1)
             m_index = ++nodesCount;
 
         newNode->Flush();

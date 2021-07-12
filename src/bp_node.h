@@ -39,7 +39,7 @@ public:
 
     virtual void Load() = 0;
     virtual void Flush() = 0;
-    virtual std::optional<CreatedBPNode> Put(Key key, const std::string& value, FileIndex& nodesCount, bool isRoot) = 0;
+    virtual std::optional<CreatedBPNode> Put(Key key, const std::string& value, FileIndex& nodesCount) = 0;
     virtual std::string Get(Key key) const = 0;
     virtual uint32_t GetKeyCount() const;
     virtual Key GetFirstKey() const;

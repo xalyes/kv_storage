@@ -8,7 +8,7 @@ namespace kv_storage {
 
 void VolumeImpl::Put(const Key& key, const std::string& value)
 {
-    auto newNode = m_root->Put(key, value, m_nodesCount, true);
+    auto newNode = m_root->Put(key, value, m_nodesCount);
     if (!newNode)
         return;
 

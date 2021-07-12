@@ -5,11 +5,11 @@
 
 namespace kv_storage {
 
-std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileIndex& nodesCount, bool isRoot)
+std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileIndex& nodesCount)
 {
     if (m_keyCount == MaxKeys)
     {
-        if (isRoot)
+        if (m_index == 1)
             m_index = ++nodesCount;
 
         return SplitAndPut(key, val, nextBatch, nodesCount);
@@ -110,13 +110,13 @@ CreatedBPNode Leaf::SplitAndPut(Key key, const std::string& value, FileIndex nex
 
     if (key < firstNewKey)
     {
-        Put(key, value, nodesCount, false);
+        Put(key, value, nodesCount);
         newLeaf->Flush();
     }
     else
     {
         Flush();
-        newLeaf->Put(key, value, nodesCount, false);
+        newLeaf->Put(key, value, nodesCount);
     }
 
     return { std::move(newLeaf), firstNewKey };

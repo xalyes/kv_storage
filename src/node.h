@@ -21,7 +21,7 @@ public:
 
     virtual void Load() override;
     virtual void Flush() override;
-    virtual std::optional<CreatedBPNode> Put(Key key, const std::string& value, FileIndex& nodesCount, bool isRoot) override;
+    virtual std::optional<CreatedBPNode> Put(Key key, const std::string& value, FileIndex& nodesCount) override;
     virtual std::string Get(Key key) const override;
 
 public:
