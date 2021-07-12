@@ -16,14 +16,14 @@ std::string Node::Get(Key key) const
         if (key < m_keys[i])
         {
             // TODO: Impl some cache for loaded batches
-            foundChild = CreateBPNode(m_dir, ptrs[i]);
+            foundChild = CreateBPNode(m_dir, m_ptrs[i]);
             childPos = i;
             break;
         }
     }
 
     if (!foundChild)
-        foundChild = CreateBPNode(m_dir, ptrs[m_keyCount]);
+        foundChild = CreateBPNode(m_dir, m_ptrs[m_keyCount]);
 
     return foundChild->Get(key);
 }
@@ -39,14 +39,14 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
         if (key < m_keys[i])
         {
             // TODO: Impl some cache for loaded batches
-            foundChild = CreateBPNode(m_dir, ptrs[i]);
+            foundChild = CreateBPNode(m_dir, m_ptrs[i]);
             childPos = i;
             break;
         }
     }
 
     if (!foundChild)
-        foundChild = CreateBPNode(m_dir, ptrs[m_keyCount]);
+        foundChild = CreateBPNode(m_dir, m_ptrs[m_keyCount]);
 
     auto newNode = foundChild->Put(key, value, nodesCount);
     if (!newNode)
@@ -68,12 +68,12 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
         uint32_t borderIndex = MaxKeys - copyCount;
 
         std::swap(m_keys[borderIndex], newKeys[0]);
-        std::swap(ptrs[borderIndex + 1], newPtrs[0]);
+        std::swap(m_ptrs[borderIndex + 1], newPtrs[0]);
 
         for (uint32_t i = borderIndex + 1; i < MaxKeys; i++)
         {
             std::swap(m_keys[i], newKeys[i - borderIndex]);
-            std::swap(ptrs[i + 1], newPtrs[i - borderIndex]);
+            std::swap(m_ptrs[i + 1], newPtrs[i - borderIndex]);
         }
 
         m_keyCount -= copyCount;
@@ -111,7 +111,7 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
                     continue;
 
                 InsertToArray(m_keys, i, firstNewKey);
-                InsertToArray(ptrs, i + 1, newNode.value().node->GetIndex());
+                InsertToArray(m_ptrs, i + 1, newNode.value().node->GetIndex());
                 m_keyCount++;
                 found = true;
                 break;
@@ -120,7 +120,7 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
             if (!found)
             {
                 InsertToArray(m_keys, m_keyCount, firstNewKey);
-                InsertToArray(ptrs, m_keyCount + 1, newNode.value().node->GetIndex());
+                InsertToArray(m_ptrs, m_keyCount + 1, newNode.value().node->GetIndex());
                 m_keyCount++;
             }
         }
@@ -153,7 +153,7 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
             if (keyForInsert < m_keys[i])
             {
                 InsertToArray(m_keys, i, keyForInsert);
-                InsertToArray(ptrs, i + 1, newNode.value().node->GetIndex());
+                InsertToArray(m_ptrs, i + 1, newNode.value().node->GetIndex());
                 m_keyCount++;
                 Flush();
                 return std::nullopt;
@@ -161,7 +161,7 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
         }
 
         InsertToArray(m_keys, m_keyCount, keyForInsert);
-        InsertToArray(ptrs, m_keyCount + 1, newNode.value().node->GetIndex());
+        InsertToArray(m_ptrs, m_keyCount + 1, newNode.value().node->GetIndex());
         m_keyCount++;
 
         Flush();
@@ -180,7 +180,7 @@ void Node::Load()
 
     in.read(reinterpret_cast<char*>(&(m_keyCount)), sizeof(m_keyCount));
     in.read(reinterpret_cast<char*>(&(m_keys)), sizeof(m_keys));
-    in.read(reinterpret_cast<char*>(&(ptrs)), sizeof(ptrs));
+    in.read(reinterpret_cast<char*>(&(m_ptrs)), sizeof(m_ptrs));
 }
 
 void Node::Flush()
@@ -193,7 +193,7 @@ void Node::Flush()
 
     out.write(reinterpret_cast<char*>(&(m_keyCount)), sizeof(m_keyCount));
     out.write(reinterpret_cast<char*>(&(m_keys)), sizeof(m_keys));
-    out.write(reinterpret_cast<char*>(&(ptrs)), sizeof(ptrs));
+    out.write(reinterpret_cast<char*>(&(m_ptrs)), sizeof(m_ptrs));
 }
 
 } // kv_storage

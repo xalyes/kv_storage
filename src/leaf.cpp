@@ -19,8 +19,8 @@ std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileInde
     {
         InsertToArray(m_keys, 0, key);
 
-        values.push_back(val);
-        InsertToArray(valuesOffsets, 0, sizeof(m_keyCount) + sizeof(m_keys) + sizeof(valuesOffsets) + 1);
+        m_values.push_back(val);
+        InsertToArray(m_valuesOffsets, 0, sizeof(m_keyCount) + sizeof(m_keys) + sizeof(m_valuesOffsets) + 1);
 
         m_keyCount++;
     }
@@ -36,17 +36,17 @@ std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileInde
                 {
                     InsertToArray(m_keys, i, key);
 
-                    values.insert(values.begin() + i, val);
+                    m_values.insert(m_values.begin() + i, val);
                     if (i != 0)
-                        InsertToArray(valuesOffsets, i, valuesOffsets[i - 1] + values[i - 1].size());
+                        InsertToArray(m_valuesOffsets, i, m_valuesOffsets[i - 1] + m_values[i - 1].size());
                     else
-                        InsertToArray(valuesOffsets, 0, sizeof(m_keyCount) + sizeof(m_keys) + sizeof(valuesOffsets) + 1);
+                        InsertToArray(m_valuesOffsets, 0, sizeof(m_keyCount) + sizeof(m_keys) + sizeof(m_valuesOffsets) + 1);
 
                     m_keyCount++;
 
                     for (size_t j = i + 1; j < m_keyCount; j++)
                     {
-                        valuesOffsets[j] += val.size();
+                        m_valuesOffsets[j] += val.size();
                     }
                 }
                 else
@@ -66,8 +66,8 @@ std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileInde
         size_t i = m_keyCount;
         m_keys[i] = key;
 
-        values.push_back(val);
-        valuesOffsets[i] = valuesOffsets[i - 1] + values[i - 1].size();
+        m_values.push_back(val);
+        m_valuesOffsets[i] = m_valuesOffsets[i - 1] + m_values[i - 1].size();
 
         m_keyCount++;
     }
@@ -86,14 +86,14 @@ CreatedBPNode Leaf::SplitAndPut(Key key, const std::string& value, FileIndex& no
 
     std::vector<std::string> newValues;
 
-    uint32_t borderIndex = values.size() - copyCount;
+    uint32_t borderIndex = m_values.size() - copyCount;
 
-    newValues.insert(newValues.end(), std::make_move_iterator(values.begin() + borderIndex),
-        std::make_move_iterator(values.end()));
-    values.erase(values.begin() + borderIndex, values.end());
+    newValues.insert(newValues.end(), std::make_move_iterator(m_values.begin() + borderIndex),
+        std::make_move_iterator(m_values.end()));
+    m_values.erase(m_values.begin() + borderIndex, m_values.end());
 
     std::swap(m_keys[borderIndex], newKeys[0]);
-    newOffsets[0] = sizeof(m_keyCount) + sizeof(m_keys) + sizeof(valuesOffsets) + 1;
+    newOffsets[0] = sizeof(m_keyCount) + sizeof(m_keys) + sizeof(m_valuesOffsets) + 1;
 
     for (uint32_t i = borderIndex + 1; i < MaxKeys; i++)
     {
@@ -130,7 +130,7 @@ std::string Leaf::Get(Key key) const
     {
         if (m_keys[i] == key)
         {
-            return values[i];
+            return m_values[i];
         }
     }
 
@@ -150,24 +150,24 @@ void Leaf::Load()
 
     in.read(reinterpret_cast<char*>(&(m_keyCount)), sizeof(m_keyCount));
     in.read(reinterpret_cast<char*>(&(m_keys)), sizeof(m_keys));
-    in.read(reinterpret_cast<char*>(&(valuesOffsets)), sizeof(valuesOffsets));
+    in.read(reinterpret_cast<char*>(&(m_valuesOffsets)), sizeof(m_valuesOffsets));
 
     for (uint64_t i = 0; i < m_keyCount; i++)
     {
-        auto offset = valuesOffsets[i];
+        auto offset = m_valuesOffsets[i];
         uint64_t endOffset;
 
         if (i == m_keyCount - 1)
             endOffset = filesize - sizeof(m_nextBatch);
         else
-            endOffset = valuesOffsets[i + 1];
+            endOffset = m_valuesOffsets[i + 1];
 
         auto size = endOffset - offset;
 
         auto buf = std::make_unique<char[]>(size + 1);
         in.read(buf.get(), size);
         buf.get()[size] = '\0';
-        values.emplace_back(buf.get());
+        m_values.emplace_back(buf.get());
         //std::cout << "Reading " << buf << std::endl;
     }
 
@@ -183,9 +183,9 @@ void Leaf::Flush()
     out.write("9", 1);
     out.write(reinterpret_cast<char*>(&(m_keyCount)), sizeof(m_keyCount));
     out.write(reinterpret_cast<char*>(&(m_keys)), sizeof(m_keys));
-    out.write(reinterpret_cast<char*>(&(valuesOffsets)), sizeof(valuesOffsets));
+    out.write(reinterpret_cast<char*>(&(m_valuesOffsets)), sizeof(m_valuesOffsets));
 
-    for (const auto& v : values)
+    for (const auto& v : m_values)
     {
         out.write(v.data(), v.size());
         //std::cout << "Writing " << v << std::endl;

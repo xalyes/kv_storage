@@ -16,7 +16,7 @@ constexpr size_t MaxKeys = B - 1;
 using Key = uint64_t;
 using FileIndex = uint64_t;
 
-class CreatedBPNode;
+struct CreatedBPNode;
 
 class BPNode
 {
@@ -53,9 +53,8 @@ protected:
 };
 
 // ptr to new created BPNode & key to be inserted to parent node
-class CreatedBPNode
+struct CreatedBPNode
 {
-public:
     std::unique_ptr<BPNode> node;
     Key key;
 };

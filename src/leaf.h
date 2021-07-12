@@ -12,13 +12,13 @@ public:
     Leaf(const fs::path& dir, FileIndex idx)
         : BPNode(dir, idx)
     {
-        valuesOffsets.fill(0);
+        m_valuesOffsets.fill(0);
     }
 
     Leaf(const fs::path& dir, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<Offset, MaxKeys>&& newOffsets, std::vector<std::string>&& newValues, FileIndex newNextBatch)
         : BPNode(dir, idx, newKeyCount, std::move(newKeys))
-        , valuesOffsets(newOffsets)
-        , values(newValues)
+        , m_valuesOffsets(newOffsets)
+        , m_values(newValues)
         , m_nextBatch(newNextBatch)
     {}
 
@@ -29,8 +29,8 @@ public:
     std::string Get(Key key) const override;
 
 private:
-    std::array<Offset, MaxKeys> valuesOffsets;
-    std::vector<std::string> values;
+    std::array<Offset, MaxKeys> m_valuesOffsets;
+    std::vector<std::string> m_values;
     FileIndex m_nextBatch{ 0 };
 };
 

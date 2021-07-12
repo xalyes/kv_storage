@@ -11,12 +11,12 @@ public:
     Node(const fs::path& dir, FileIndex idx)
         : BPNode(dir, idx)
     {
-        ptrs.fill(0);
+        m_ptrs.fill(0);
     }
 
     Node(const fs::path& dir, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<FileIndex, B>&& newPtrs)
         : BPNode(dir, idx, newKeyCount, std::move(newKeys))
-        , ptrs(newPtrs)
+        , m_ptrs(newPtrs)
     {}
 
     virtual void Load() override;
@@ -25,7 +25,7 @@ public:
     virtual std::string Get(Key key) const override;
 
 public:
-    std::array<FileIndex, B> ptrs;
+    std::array<FileIndex, B> m_ptrs;
 };
 
 } // kv_storage
