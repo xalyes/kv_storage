@@ -12,7 +12,7 @@ std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileInde
         if (m_index == 1)
             m_index = ++nodesCount;
 
-        return SplitAndPut(key, val, nextBatch, nodesCount);
+        return SplitAndPut(key, val, nodesCount);
     }
 
     if (m_keyCount == 0)
@@ -75,7 +75,7 @@ std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileInde
     return std::nullopt;
 }
 
-CreatedBPNode Leaf::SplitAndPut(Key key, const std::string& value, FileIndex nextBatch, FileIndex& nodesCount)
+CreatedBPNode Leaf::SplitAndPut(Key key, const std::string& value, FileIndex& nodesCount)
 {
     uint32_t copyCount = MaxKeys / 2;
 
@@ -106,7 +106,9 @@ CreatedBPNode Leaf::SplitAndPut(Key key, const std::string& value, FileIndex nex
 
     Key firstNewKey = newKeys[0];
 
-    auto newLeaf = std::make_unique<Leaf>(m_dir, ++nodesCount, copyCount, std::move(newKeys), std::move(newOffsets), std::move(newValues), nextBatch);
+    auto newLeaf = std::make_unique<Leaf>(m_dir, ++nodesCount, copyCount, std::move(newKeys), std::move(newOffsets), std::move(newValues), m_nextBatch);
+
+    m_nextBatch = newLeaf->GetIndex();
 
     if (key < firstNewKey)
     {
@@ -156,7 +158,7 @@ void Leaf::Load()
         uint64_t endOffset;
 
         if (i == m_keyCount - 1)
-            endOffset = filesize - sizeof(nextBatch);
+            endOffset = filesize - sizeof(m_nextBatch);
         else
             endOffset = valuesOffsets[i + 1];
 
@@ -169,7 +171,7 @@ void Leaf::Load()
         //std::cout << "Reading " << buf << std::endl;
     }
 
-    in.read(reinterpret_cast<char*>(&(nextBatch)), sizeof(nextBatch));
+    in.read(reinterpret_cast<char*>(&(m_nextBatch)), sizeof(m_nextBatch));
 }
 
 void Leaf::Flush()
@@ -189,7 +191,7 @@ void Leaf::Flush()
         //std::cout << "Writing " << v << std::endl;
     }
 
-    out.write(reinterpret_cast<char*>(&(nextBatch)), sizeof(nextBatch));
+    out.write(reinterpret_cast<char*>(&(m_nextBatch)), sizeof(m_nextBatch));
 }
 
 } // kv_storage
