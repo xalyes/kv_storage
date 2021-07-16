@@ -5,6 +5,7 @@
 
 namespace kv_storage {
 
+
 class Node : public BPNode
 {
 public:
@@ -23,6 +24,8 @@ public:
     virtual void Flush() override;
     virtual std::optional<CreatedBPNode> Put(Key key, const std::string& value, FileIndex& nodesCount) override;
     virtual std::string Get(Key key) const override;
+    virtual DeleteResult Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) override;
+    virtual Key GetMinimum() const override;
 
 public:
     std::array<FileIndex, B> m_ptrs;

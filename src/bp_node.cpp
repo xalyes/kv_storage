@@ -11,14 +11,19 @@ uint32_t BPNode::GetKeyCount() const
     return m_keyCount;
 }
 
-Key BPNode::GetFirstKey() const
+Key BPNode::GetLastKey() const
 {
-    return m_keys[0];
+    return m_keys[m_keyCount - 1];
 }
 
 FileIndex BPNode::GetIndex() const
 {
     return m_index;
+}
+
+void BPNode::SetIndex(FileIndex index)
+{
+    m_index = index;
 }
 
 std::unique_ptr<BPNode> CreateEmptyBPNode(const fs::path& dir, FileIndex idx)

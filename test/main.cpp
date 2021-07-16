@@ -83,3 +83,41 @@ BOOST_AUTO_TEST_CASE(FewBatchesTest)
         BOOST_TEST(keys.count(s->Get(i)) == 1);
     }
 }
+
+BOOST_AUTO_TEST_CASE(DeleteTest)
+{
+    fs::path volumeDir("vol");
+    fs::remove_all(volumeDir);
+
+    std::vector<int> keys;
+
+    {
+        const int count = 1000;
+
+        auto s = kv_storage::CreateVolume(volumeDir);
+
+        for (int i = 0; i < count; i++)
+        {
+            s->Put(i+1, "value" + std::to_string(i+1));
+            keys.push_back(i+1);
+        }
+
+        std::random_device rd;
+        const uint32_t seed = rd();
+        std::cout << "seed: " << seed << std::endl;
+        std::mt19937 rng(seed);
+
+        std::shuffle(keys.begin(), keys.end(), rng);
+
+        for (int i = 0; i < count; i++)
+        {
+            std::cout << "Deleting " << keys[i] << std::endl;
+            s->Delete(keys[i]);
+
+            for (int j = i + 1; j < count; j++)
+            {
+                BOOST_TEST(s->Get(keys[j]) == "value" + std::to_string(keys[j]));
+            }
+        }
+    }
+}

@@ -1,23 +1,24 @@
 #ifndef LEAF_H
 #define LEAF_H
 
+#include <optional>
+
 #include "bp_node.h"
 
 namespace kv_storage {
 
 using Offset = uint64_t;
+
 class Leaf : public BPNode
 {
 public:
     Leaf(const fs::path& dir, FileIndex idx)
         : BPNode(dir, idx)
     {
-        m_valuesOffsets.fill(0);
     }
 
-    Leaf(const fs::path& dir, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<Offset, MaxKeys>&& newOffsets, std::vector<std::string>&& newValues, FileIndex newNextBatch)
+    Leaf(const fs::path& dir, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::vector<std::string>&& newValues, FileIndex newNextBatch)
         : BPNode(dir, idx, newKeyCount, std::move(newKeys))
-        , m_valuesOffsets(newOffsets)
         , m_values(newValues)
         , m_nextBatch(newNextBatch)
     {}
@@ -25,11 +26,16 @@ public:
     virtual void Load() override;
     virtual void Flush() override;
     virtual std::optional<CreatedBPNode> Put(Key key, const std::string& val, FileIndex& nodesCount) override;
-    CreatedBPNode SplitAndPut(Key key, const std::string& value, FileIndex& nodesCount);
-    std::string Get(Key key) const override;
+    virtual std::string Get(Key key) const override;
+    virtual DeleteResult Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) override;
+    virtual Key GetMinimum() const override;
 
 private:
-    std::array<Offset, MaxKeys> m_valuesOffsets;
+    CreatedBPNode SplitAndPut(Key key, const std::string& value, FileIndex& nodesCount);
+    void LeftJoin(const Leaf& leaf);
+    void RightJoin(const Leaf& leaf);
+
+private:
     std::vector<std::string> m_values;
     FileIndex m_nextBatch{ 0 };
 };

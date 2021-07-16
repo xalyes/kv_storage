@@ -6,6 +6,7 @@
 
 namespace kv_storage {
 
+
 void VolumeImpl::Put(const Key& key, const std::string& value)
 {
     auto newNode = m_root->Put(key, value, m_nodesCount);
@@ -27,13 +28,19 @@ void VolumeImpl::Put(const Key& key, const std::string& value)
 
 void VolumeImpl::Delete(const Key& key)
 {
-    // TODO
+    auto res = m_root->Delete(key, std::nullopt, std::nullopt);
+    if (res.type == DeleteResult::Type::MergedRight || res.type == DeleteResult::Type::MergedLeft)
+    {
+        m_root = std::move(res.node);
+        return;
+    }
 }
 
 std::string VolumeImpl::Get(const Key& key)
 {
     return m_root->Get(key);
 }
+
 
 VolumeImpl::VolumeImpl(const fs::path& directory)
     : m_dir(directory)
@@ -42,20 +49,14 @@ VolumeImpl::VolumeImpl(const fs::path& directory)
     {
         fs::create_directories(m_dir);
         m_root = CreateEmptyBPNode(m_dir, 1);
-        m_nodesCount = 1;
     }
     else
     {
         m_root = CreateBPNode(m_dir, 1);
 
         const auto batchFileFormat = std::regex("batch_\\d+\\.dat");
-        m_nodesCount = std::count_if(fs::directory_iterator(m_dir), fs::directory_iterator{},
-            [&batchFileFormat](const fs::path& p)
-            {
-                return std::regex_match(p.filename().string(), batchFileFormat);
-            }
-        );
     }
+    m_nodesCount = 1;
 }
 
 std::unique_ptr<Volume> CreateVolume(const std::filesystem::path& volumeDirectory)
