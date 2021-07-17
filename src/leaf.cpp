@@ -94,7 +94,8 @@ CreatedBPNode Leaf::SplitAndPut(Key key, const std::string& value, FileIndex& no
     Key firstNewKey = newKeys[0];
 
     nodesCount = FindFreeIndex(m_dir, nodesCount);
-    auto newLeaf = std::make_unique<Leaf>(m_dir, nodesCount, copyCount, std::move(newKeys), std::move(newValues), m_nextBatch);
+    auto newLeaf = std::make_shared<Leaf>(m_dir, m_cache, nodesCount, copyCount, std::move(newKeys), std::move(newValues), m_nextBatch);
+    m_cache.insert(nodesCount, newLeaf);
 
     m_nextBatch = newLeaf->m_index;
 
@@ -169,14 +170,15 @@ DeleteResult Leaf::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
                 return { DeleteResult::Type::Deleted, std::nullopt };
             }
 
-            std::unique_ptr<Leaf> leftSiblingLeaf;
-            std::unique_ptr<Leaf> rightSiblingLeaf;
+            std::shared_ptr<Leaf> leftSiblingLeaf;
+            std::shared_ptr<Leaf> rightSiblingLeaf;
 
             // 3. If left sibling has enough keys we can simple borrow the entry.
             if (leftSibling)
             {
-                leftSiblingLeaf = std::make_unique<Leaf>(m_dir, leftSibling->index);
+                leftSiblingLeaf = std::make_shared<Leaf>(m_dir, m_cache, leftSibling->index);
                 leftSiblingLeaf->Load();
+                m_cache.insert(leftSibling->index, leftSiblingLeaf);
 
                 if (leftSiblingLeaf->m_keyCount > MinKeys)
                 {
@@ -192,8 +194,9 @@ DeleteResult Leaf::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
             // 4. If right sibling has enough keys we can simple borrow the entry.
             if (rightSibling)
             {
-                rightSiblingLeaf = std::make_unique<Leaf>(m_dir, rightSibling->index);
+                rightSiblingLeaf = std::make_shared<Leaf>(m_dir, m_cache, rightSibling->index);
                 rightSiblingLeaf->Load();
+                m_cache.insert(rightSibling->index, rightSiblingLeaf);
 
                 if (rightSiblingLeaf->m_keyCount > MinKeys)
                 {
@@ -271,7 +274,6 @@ void Leaf::Load()
         in.read(buf.get(), size);
         buf.get()[size] = '\0';
         m_values.emplace_back(buf.get());
-        //std::cout << "Reading " << buf << std::endl;
     }
 
     in.read(reinterpret_cast<char*>(&(m_nextBatch)), sizeof(m_nextBatch));

@@ -7,6 +7,8 @@
 #include <optional>
 #include <filesystem>
 
+#include <boost/compute/detail/lru_cache.hpp>
+
 namespace fs = std::filesystem;
 
 namespace kv_storage {
@@ -26,6 +28,10 @@ constexpr size_t MinKeys = Half(B);
 using Key = uint64_t;
 using FileIndex = uint64_t;
 
+class BPNode;
+
+using BPCache = boost::compute::detail::lru_cache<FileIndex, std::shared_ptr<BPNode>>;
+
 struct CreatedBPNode;
 struct DeleteResult;
 
@@ -38,15 +44,17 @@ struct Sibling
 class BPNode
 {
 public:
-    BPNode(const fs::path& dir, FileIndex idx)
+    BPNode(const fs::path& dir, BPCache& cache, FileIndex idx)
         : m_dir(dir)
+        , m_cache(cache)
         , m_index(idx)
     {
         m_keys.fill(0);
     }
 
-    BPNode(const fs::path& dir, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys)
+    BPNode(const fs::path& dir, BPCache& cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys)
         : m_dir(dir)
+        , m_cache(cache)
         , m_index(idx)
         , m_keyCount(newKeyCount)
         , m_keys(newKeys)
@@ -59,14 +67,15 @@ public:
     virtual std::optional<CreatedBPNode> Put(Key key, const std::string& value, FileIndex& nodesCount) = 0;
     virtual std::string Get(Key key) const = 0;
     virtual DeleteResult Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) = 0;
-    virtual uint32_t GetKeyCount() const;
     virtual Key GetMinimum() const = 0;
+    virtual uint32_t GetKeyCount() const;
     virtual Key GetLastKey() const;
     virtual FileIndex GetIndex() const;
     virtual void SetIndex(FileIndex index);
 
 protected:
     const fs::path m_dir;
+    BPCache& m_cache;
     FileIndex m_index{ 0 };
     uint32_t m_keyCount{ 0 };
     std::array<Key, MaxKeys> m_keys;
@@ -75,7 +84,7 @@ protected:
 // ptr to new created BPNode & key to be inserted to parent node
 struct CreatedBPNode
 {
-    std::unique_ptr<BPNode> node;
+    std::shared_ptr<BPNode> node;
     Key key;
 };
 
@@ -93,12 +102,12 @@ public:
 
     Type type;
     std::optional<Key> key;
-    std::unique_ptr<BPNode> node;
+    std::shared_ptr<BPNode> node;
 };
 
-std::unique_ptr<BPNode> CreateEmptyBPNode(const fs::path& dir, FileIndex idx);
+std::shared_ptr<BPNode> CreateEmptyBPNode(const fs::path& dir, BPCache& cache, FileIndex idx);
 
-std::unique_ptr<BPNode> CreateBPNode(const fs::path& dir, FileIndex idx);
+std::shared_ptr<BPNode> CreateBPNode(const fs::path& dir, BPCache& cache, FileIndex idx);
 
 } // kv_storage
 

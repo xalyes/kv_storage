@@ -22,13 +22,13 @@ uint32_t Node::FindKeyPosition(Key key) const
 
 std::string Node::Get(Key key) const
 {
-    auto foundChild = CreateBPNode(m_dir, m_ptrs[FindKeyPosition(key)]);
+    auto foundChild = CreateBPNode(m_dir, m_cache, m_ptrs[FindKeyPosition(key)]);
     return foundChild->Get(key);
 }
 
 std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIndex& nodesCount)
 {
-    auto foundChild = CreateBPNode(m_dir, m_ptrs[FindKeyPosition(key)]);
+    auto foundChild = CreateBPNode(m_dir, m_cache, m_ptrs[FindKeyPosition(key)]);
 
     auto newNode = foundChild->Put(key, value, nodesCount);
     if (!newNode)
@@ -117,7 +117,8 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
         copyCount--;
 
         nodesCount = FindFreeIndex(m_dir, nodesCount);
-        auto newNode = std::make_unique<Node>(m_dir, nodesCount, copyCount, std::move(newKeys), std::move(newPtrs));
+        auto newNode = std::make_shared<Node>(m_dir, m_cache, nodesCount, copyCount, std::move(newKeys), std::move(newPtrs));
+        m_cache.insert(nodesCount, newNode);
 
         if (m_index == 1)
         {
@@ -158,11 +159,11 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
 DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling)
 {
     // 1. Find and load child node/leaf where key could be stored.
-    std::unique_ptr<BPNode> foundChild;
+    std::shared_ptr<BPNode> foundChild;
     uint32_t childPos;
     {
         childPos = FindKeyPosition(key);
-        foundChild = CreateBPNode(m_dir, m_ptrs[childPos]);
+        foundChild = CreateBPNode(m_dir, m_cache, m_ptrs[childPos]);
     }
 
     // 2. Save information about siblings of found child.
@@ -265,13 +266,14 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
         return { DeleteResult::Type::Deleted, std::nullopt, nullptr };
     }
 
-    std::unique_ptr<Node> leftSiblingNode;
+    std::shared_ptr<Node> leftSiblingNode;
 
     // 7. Try to borrow left sibling's key...
     if (leftSibling)
     {
-        leftSiblingNode = std::make_unique<Node>(m_dir, leftSibling->index);
+        leftSiblingNode = std::make_shared<Node>(m_dir, m_cache, leftSibling->index);
         leftSiblingNode->Load();
+        m_cache.insert(leftSibling->index, leftSiblingNode);
 
         if (leftSiblingNode->m_keyCount > MinKeys)
         {
@@ -290,13 +292,14 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
         }
     }
 
-    std::unique_ptr<Node> rightSiblingNode;
+    std::shared_ptr<Node> rightSiblingNode;
 
     // 8. Try to borrow right sibling's key...
     if (rightSibling)
     {
-        rightSiblingNode = std::make_unique<Node>(m_dir, rightSibling->index);
+        rightSiblingNode = std::make_shared<Node>(m_dir, m_cache, rightSibling->index);
         rightSiblingNode->Load();
+        m_cache.insert(rightSibling->index, rightSiblingNode);
 
         if (rightSiblingNode->m_keyCount > MinKeys)
         {
@@ -370,7 +373,7 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
 
 Key Node::GetMinimum() const
 {
-    auto child = CreateBPNode(m_dir, m_ptrs[0]);
+    auto child = CreateBPNode(m_dir, m_cache, m_ptrs[0]);
     return child->GetMinimum();
 }
 

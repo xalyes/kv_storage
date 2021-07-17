@@ -9,14 +9,14 @@ namespace kv_storage {
 class Node : public BPNode
 {
 public:
-    Node(const fs::path& dir, FileIndex idx)
-        : BPNode(dir, idx)
+    Node(const fs::path& dir, BPCache& cache, FileIndex idx)
+        : BPNode(dir, cache, idx)
     {
         m_ptrs.fill(0);
     }
 
-    Node(const fs::path& dir, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<FileIndex, B>&& newPtrs)
-        : BPNode(dir, idx, newKeyCount, std::move(newKeys))
+    Node(const fs::path& dir, BPCache& cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<FileIndex, B>&& newPtrs)
+        : BPNode(dir, cache, idx, newKeyCount, std::move(newKeys))
         , m_ptrs(newPtrs)
     {}
 

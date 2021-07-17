@@ -12,13 +12,13 @@ using Offset = uint64_t;
 class Leaf : public BPNode
 {
 public:
-    Leaf(const fs::path& dir, FileIndex idx)
-        : BPNode(dir, idx)
+    Leaf(const fs::path& dir, BPCache& cache, FileIndex idx)
+        : BPNode(dir, cache, idx)
     {
     }
 
-    Leaf(const fs::path& dir, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::vector<std::string>&& newValues, FileIndex newNextBatch)
-        : BPNode(dir, idx, newKeyCount, std::move(newKeys))
+    Leaf(const fs::path& dir, BPCache& cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::vector<std::string>&& newValues, FileIndex newNextBatch)
+        : BPNode(dir, cache, idx, newKeyCount, std::move(newKeys))
         , m_values(newValues)
         , m_nextBatch(newNextBatch)
     {}

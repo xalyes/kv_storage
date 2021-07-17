@@ -26,13 +26,19 @@ void BPNode::SetIndex(FileIndex index)
     m_index = index;
 }
 
-std::unique_ptr<BPNode> CreateEmptyBPNode(const fs::path& dir, FileIndex idx)
+std::shared_ptr<BPNode> CreateEmptyBPNode(const fs::path& dir, BPCache& cache, FileIndex idx)
 {
-    return std::make_unique<Leaf>(dir, idx);
+    auto leaf = std::make_shared<Leaf>(dir, cache, idx);
+    cache.insert(idx, leaf);
+    return leaf;
 }
 
-std::unique_ptr<BPNode> CreateBPNode(const fs::path& dir, FileIndex idx)
+std::shared_ptr<BPNode> CreateBPNode(const fs::path& dir, BPCache& cache, FileIndex idx)
 {
+    auto bpNode = cache.get(idx);
+    if (bpNode)
+        return *bpNode;
+
     std::ifstream in;
     in.exceptions(~std::ifstream::goodbit);
     in.open(fs::path(dir) / ("batch_" + std::to_string(idx) + ".dat"), std::ios::in | std::ios::binary);
@@ -44,15 +50,17 @@ std::unique_ptr<BPNode> CreateBPNode(const fs::path& dir, FileIndex idx)
     if (type == '8')
     {
         in.close();
-        auto node = std::make_unique<Node>(dir, idx);
+        auto node = std::make_shared<Node>(dir, cache, idx);
         node->Load();
+        cache.insert(idx, node);
         return node;
     }
     else if (type == '9')
     {
         in.close();
-        auto leaf = std::make_unique<Leaf>(dir, idx);
+        auto leaf = std::make_shared<Leaf>(dir, cache, idx);
         leaf->Load();
+        cache.insert(idx, leaf);
         return leaf;
     }
     else

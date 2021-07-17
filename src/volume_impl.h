@@ -25,9 +25,10 @@ public:
     virtual ~VolumeImpl() = default;
 
 private:
-    std::unique_ptr<BPNode> m_root;
+    std::shared_ptr<BPNode> m_root;
     const fs::path m_dir;
     FileIndex m_nodesCount;
+    boost::compute::detail::lru_cache<FileIndex, std::shared_ptr<BPNode>> m_cache;
 };
 
 } // kv_storage
