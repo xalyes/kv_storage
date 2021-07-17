@@ -6,6 +6,13 @@
 
 namespace kv_storage {
 
+void Leaf::Insert(Key key, const std::string& value, uint32_t pos)
+{
+    InsertToArray(m_keys, pos, key);
+    m_values.insert(m_values.begin() + pos, value);
+    m_keyCount++;
+}
+
 std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileIndex& nodesCount)
 {
     if (m_keyCount == MaxKeys)
@@ -21,11 +28,7 @@ std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileInde
 
     if (m_keyCount == 0)
     {
-        InsertToArray(m_keys, 0, key);
-
-        m_values.push_back(val);
-
-        m_keyCount++;
+        Insert(key, val, 0);
     }
     else
     {
@@ -37,11 +40,7 @@ std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileInde
             {
                 if (m_keyCount != MaxKeys)
                 {
-                    InsertToArray(m_keys, i, key);
-
-                    m_values.insert(m_values.begin() + i, val);
-
-                    m_keyCount++;
+                    Insert(key, val, i);
                 }
                 else
                 {
@@ -57,12 +56,7 @@ std::optional<CreatedBPNode> Leaf::Put(Key key, const std::string& val, FileInde
             }
         }
 
-        size_t i = m_keyCount;
-        m_keys[i] = key;
-
-        m_values.push_back(val);
-
-        m_keyCount++;
+        Insert(key, val, m_keyCount);
     }
     Flush();
     return std::nullopt;
@@ -188,10 +182,9 @@ DeleteResult Leaf::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
                 {
                     auto key = leftSiblingLeaf->GetLastKey();
                     auto value = leftSiblingLeaf->m_values[leftSiblingLeaf->m_keyCount - 1];
-                    FileIndex unused = 0;
-                    Put(key, value, unused);
+                    Insert(key, value, 0);
                     leftSiblingLeaf->Delete(key, std::nullopt, std::nullopt);
-                    leftSiblingLeaf->Flush();
+                    Flush();
                     return { DeleteResult::Type::BorrowedLeft, m_keys[0] };
                 }
             }
@@ -206,10 +199,9 @@ DeleteResult Leaf::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
                 {
                     auto key = rightSiblingLeaf->m_keys[0];
                     auto value = rightSiblingLeaf->m_values[0];
-                    FileIndex unused = 0;
-                    Put(key, value, unused);
+                    Insert(key, value, m_keyCount);
                     rightSiblingLeaf->Delete(key, std::nullopt, std::nullopt);
-                    rightSiblingLeaf->Flush();
+                    Flush();
                     return { DeleteResult::Type::BorrowedRight, rightSiblingLeaf->m_keys[0] };
                 }
             }

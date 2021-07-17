@@ -6,57 +6,37 @@
 namespace kv_storage {
 
 
-std::string Node::Get(Key key) const
+uint32_t Node::FindKeyPosition(Key key) const
 {
-    std::unique_ptr<BPNode> foundChild;
-    uint32_t childPos = m_keyCount;
-
     // TODO: binary search may be?
     for (uint32_t i = 0; i < m_keyCount; i++)
     {
         if (key < m_keys[i])
         {
-            // TODO: Impl some cache for loaded batches
-            foundChild = CreateBPNode(m_dir, m_ptrs[i]);
-            childPos = i;
-            break;
+            return i;
         }
     }
 
-    if (!foundChild)
-        foundChild = CreateBPNode(m_dir, m_ptrs[m_keyCount]);
+    return m_keyCount;
+}
 
+std::string Node::Get(Key key) const
+{
+    auto foundChild = CreateBPNode(m_dir, m_ptrs[FindKeyPosition(key)]);
     return foundChild->Get(key);
 }
 
-
 std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIndex& nodesCount)
 {
-    std::unique_ptr<BPNode> foundChild;
-    uint32_t childPos = m_keyCount;
-
-    // TODO: binary search may be?
-    for (uint32_t i = 0; i < m_keyCount; i++)
-    {
-        if (key < m_keys[i])
-        {
-            // TODO: Impl some cache for loaded batches
-            foundChild = CreateBPNode(m_dir, m_ptrs[i]);
-            childPos = i;
-            break;
-        }
-    }
-
-    if (!foundChild)
-        foundChild = CreateBPNode(m_dir, m_ptrs[m_keyCount]);
+    auto foundChild = CreateBPNode(m_dir, m_ptrs[FindKeyPosition(key)]);
 
     auto newNode = foundChild->Put(key, value, nodesCount);
     if (!newNode)
     {
         return std::nullopt;
     }
-    // Child splitted
 
+    // Child splitted
     if (m_keyCount == MaxKeys)
     {
         // Must split this node
@@ -175,48 +155,42 @@ std::optional<CreatedBPNode> Node::Put(Key key, const std::string& value, FileIn
     }
 }
 
-
 DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling)
 {
+    // 1. Find and load child node/leaf where key could be stored.
     std::unique_ptr<BPNode> foundChild;
-    uint32_t childPos = m_keyCount;
-
-    // TODO: binary search may be?
-    for (uint32_t i = 0; i < m_keyCount; i++)
+    uint32_t childPos;
     {
-        if (key < m_keys[i])
+        childPos = FindKeyPosition(key);
+        foundChild = CreateBPNode(m_dir, m_ptrs[childPos]);
+    }
+
+    // 2. Save information about siblings of found child.
+    std::optional<Sibling> childRightSibling;
+    std::optional<Sibling> childLeftSibling;
+    {
+        if (childPos == 0)
         {
-            // TODO: Impl some cache for loaded batches
-            foundChild = CreateBPNode(m_dir, m_ptrs[i]);
-            childPos = i;
-            break;
+            childRightSibling = { m_keys[childPos], m_ptrs[childPos + 1] };
+        }
+        else if (childPos == m_keyCount)
+        {
+            childLeftSibling = { m_keys[childPos - 1], m_ptrs[childPos - 1] };
+        }
+        else
+        {
+            childLeftSibling = { m_keys[childPos - 1], m_ptrs[childPos - 1] };
+            childRightSibling = { m_keys[childPos], m_ptrs[childPos + 1] };
         }
     }
 
-    if (!foundChild)
-        foundChild = CreateBPNode(m_dir, m_ptrs[childPos]);
-
-    std::optional<Sibling> childRightSibling;
-    std::optional<Sibling> childLeftSibling;
-
-    if (childPos == 0)
-    {
-        childRightSibling = { m_keys[childPos], m_ptrs[childPos + 1] };
-    }
-    else if (childPos == m_keyCount)
-    {
-        childLeftSibling = { m_keys[childPos - 1], m_ptrs[childPos - 1] };
-    }
-    else
-    {
-        childLeftSibling = { m_keys[childPos - 1], m_ptrs[childPos - 1] };
-        childRightSibling = { m_keys[childPos], m_ptrs[childPos + 1] };
-    }
-
+    // 3. Recursive call child's delete method
     DeleteResult result = foundChild->Delete(key, childLeftSibling, childRightSibling);
 
     if (result.type == DeleteResult::Type::Deleted)
     {
+        // 4.1 Key deleted.
+        // Almost nothing to do. Updating key if need and returning.
         if (childPos && key == m_keys[childPos - 1])
         {
             m_keys[childPos - 1] = foundChild->GetMinimum();
@@ -224,23 +198,30 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
         }
         return result;
     }
-
-    if (result.type == DeleteResult::Type::BorrowedLeft)
+    else if (result.type == DeleteResult::Type::BorrowedLeft)
     {
-        m_keys[childPos - 1] = *result.key;
+        // 4.2 Key deleted and one key has been borrowed from left sibling.
+        // Almost nothing to do. Updating key and returning.
+        if (childPos)
+            m_keys[childPos - 1] = *result.key;
+        else
+            throw std::runtime_error("Bad tree status - leftmost child returned BorrowedLeft, but it is impossible.");
+
         Flush();
-        return { DeleteResult::Type::Deleted, std::nullopt, nullptr };
+        return { DeleteResult::Type::Deleted };
     }
-
-    if (result.type == DeleteResult::Type::BorrowedRight)
+    else if (result.type == DeleteResult::Type::BorrowedRight)
     {
+        // 4.3 Key deleted and one key has been borrowed from right sibling.
+        // Almost nothing to do. Updating key and returning.
         m_keys[childPos] = *result.key;
         Flush();
-        return { DeleteResult::Type::Deleted, std::nullopt, nullptr };
+        return { DeleteResult::Type::Deleted };
     }
-
-    if (result.type == DeleteResult::Type::MergedRight)
+    else if (result.type == DeleteResult::Type::MergedRight)
     {
+        // 4.4 Key deleted but right sibling node has been merged with the child node.
+        // Removing merged sibling.
         if (childPos > 1)
         {
             m_keys[childPos - 1] = *result.key;
@@ -249,8 +230,10 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
         RemoveFromArray(m_keys, childPos);
         RemoveFromArray(m_ptrs, childPos + 1);
     }
-    else
+    else // MergedLeft
     {
+        // 4.4 Key deleted but left sibling node has been merged with the child node.
+        // Removing merged sibling.
         if (childPos > 1)
         {
             m_keys[childPos - 1] = *result.key;
@@ -265,6 +248,8 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
     }
     m_keyCount--;
 
+    // 5. Special handling for situation when this node is root and child node has been merged with sibling.
+    // Tree shrinked and child node becomes new root.
     if (m_index == 1 && m_keyCount == 0)
     {
         Remove(m_dir, foundChild->GetIndex());
@@ -273,6 +258,7 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
         return { result.type, std::nullopt, std::move(foundChild) };
     }
 
+    // 6. Simple return if this node has enough keys or if it is root.
     if (m_keyCount >= MinKeys || m_index == 1)
     {
         Flush();
@@ -280,8 +266,8 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
     }
 
     std::unique_ptr<Node> leftSiblingNode;
-    std::unique_ptr<Node> rightSiblingNode;
 
+    // 7. Try to borrow left sibling's key...
     if (leftSibling)
     {
         leftSiblingNode = std::make_unique<Node>(m_dir, leftSibling->index);
@@ -289,7 +275,6 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
 
         if (leftSiblingNode->m_keyCount > MinKeys)
         {
-            auto key = leftSiblingNode->GetLastKey();
             auto ptr = leftSiblingNode->m_ptrs[leftSiblingNode->m_keyCount];
             RemoveFromArray(leftSiblingNode->m_keys, leftSiblingNode->m_keyCount - 1);
             RemoveFromArray(leftSiblingNode->m_ptrs, leftSiblingNode->m_keyCount);
@@ -305,6 +290,9 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
         }
     }
 
+    std::unique_ptr<Node> rightSiblingNode;
+
+    // 8. Try to borrow right sibling's key...
     if (rightSibling)
     {
         rightSiblingNode = std::make_unique<Node>(m_dir, rightSibling->index);
@@ -312,20 +300,22 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
 
         if (rightSiblingNode->m_keyCount > MinKeys)
         {
-            auto key = rightSiblingNode->m_keys[0];
             auto ptr = rightSiblingNode->m_ptrs[0];
             RemoveFromArray(rightSiblingNode->m_keys, 0);
             RemoveFromArray(rightSiblingNode->m_ptrs, 0);
             rightSiblingNode->m_keyCount--;
             rightSiblingNode->Flush();
+
             InsertToArray(m_keys, m_keyCount, rightSibling->key);
             InsertToArray(m_ptrs, m_keyCount + 1, ptr);
             m_keyCount++;
             Flush();
+
             return { DeleteResult::Type::BorrowedRight, rightSiblingNode->GetMinimum() };
         }
     }
 
+    // 9. Merging nodes...
     if (leftSiblingNode)
     {
         if (leftSibling->key != key)
@@ -390,14 +380,13 @@ void Node::Load()
     in.exceptions(~std::ofstream::goodbit);
     in.open(m_dir / ("batch_" + std::to_string(m_index) + ".dat"), std::ios::in | std::ios::binary);
 
-    // TODO: check first char is 11
+    // TODO: check first char is "8"
     in.seekg(1);
 
     in.read(reinterpret_cast<char*>(&(m_keyCount)), sizeof(m_keyCount));
     in.read(reinterpret_cast<char*>(&(m_keys)), sizeof(m_keys));
     in.read(reinterpret_cast<char*>(&(m_ptrs)), sizeof(m_ptrs));
 }
-
 
 void Node::Flush()
 {

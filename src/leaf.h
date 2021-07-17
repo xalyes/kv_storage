@@ -34,6 +34,7 @@ private:
     CreatedBPNode SplitAndPut(Key key, const std::string& value, FileIndex& nodesCount);
     void LeftJoin(const Leaf& leaf);
     void RightJoin(const Leaf& leaf);
+    void Insert(Key key, const std::string& value, uint32_t pos);
 
 private:
     std::vector<std::string> m_values;

@@ -27,6 +27,9 @@ public:
     virtual DeleteResult Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) override;
     virtual Key GetMinimum() const override;
 
+private:
+    uint32_t FindKeyPosition(Key key) const;
+
 public:
     std::array<FileIndex, B> m_ptrs;
 };
