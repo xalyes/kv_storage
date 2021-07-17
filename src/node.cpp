@@ -271,9 +271,7 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
     // 7. Try to borrow left sibling's key...
     if (leftSibling)
     {
-        leftSiblingNode = std::make_shared<Node>(m_dir, m_cache, leftSibling->index);
-        leftSiblingNode->Load();
-        m_cache.insert(leftSibling->index, leftSiblingNode);
+        leftSiblingNode = std::static_pointer_cast<Node>(CreateBPNode(m_dir, m_cache, leftSibling->index));
 
         if (leftSiblingNode->m_keyCount > MinKeys)
         {
@@ -297,9 +295,7 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
     // 8. Try to borrow right sibling's key...
     if (rightSibling)
     {
-        rightSiblingNode = std::make_shared<Node>(m_dir, m_cache, rightSibling->index);
-        rightSiblingNode->Load();
-        m_cache.insert(rightSibling->index, rightSiblingNode);
+        rightSiblingNode = std::static_pointer_cast<Node>(CreateBPNode(m_dir, m_cache, rightSibling->index));
 
         if (rightSiblingNode->m_keyCount > MinKeys)
         {

@@ -176,9 +176,7 @@ DeleteResult Leaf::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
             // 3. If left sibling has enough keys we can simple borrow the entry.
             if (leftSibling)
             {
-                leftSiblingLeaf = std::make_shared<Leaf>(m_dir, m_cache, leftSibling->index);
-                leftSiblingLeaf->Load();
-                m_cache.insert(leftSibling->index, leftSiblingLeaf);
+                leftSiblingLeaf = std::static_pointer_cast<Leaf>(CreateBPNode(m_dir, m_cache, leftSibling->index));
 
                 if (leftSiblingLeaf->m_keyCount > MinKeys)
                 {
@@ -194,9 +192,7 @@ DeleteResult Leaf::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
             // 4. If right sibling has enough keys we can simple borrow the entry.
             if (rightSibling)
             {
-                rightSiblingLeaf = std::make_shared<Leaf>(m_dir, m_cache, rightSibling->index);
-                rightSiblingLeaf->Load();
-                m_cache.insert(rightSibling->index, rightSiblingLeaf);
+                rightSiblingLeaf = std::static_pointer_cast<Leaf>(CreateBPNode(m_dir, m_cache, rightSibling->index));
 
                 if (rightSiblingLeaf->m_keyCount > MinKeys)
                 {
