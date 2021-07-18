@@ -56,21 +56,21 @@ BOOST_AUTO_TEST_CASE(FewBatchesTest)
         std::mt19937 rng(seed);
         std::uniform_int_distribution<uint64_t> uni(1, 25);
 
-        for (int i = 0; i < 10000; i++)
+        for (int i = 0; i < 100000; i++)
         {
             auto key = std::string(uni(rng), 'a') + std::to_string(i);
             keys.insert(key);
             s->Put(i, key);
         }
 
-        for (int i = 19999; i >= 10000; i--)
+        for (int i = 199999; i >= 100000; i--)
         {
             auto key = std::string(uni(rng), 'a') + std::to_string(i);
             keys.insert(key);
             s->Put(i, key);
         }
 
-        for (int i = 0; i < 20000; i++)
+        for (int i = 0; i < 200000; i++)
         {
             BOOST_TEST(keys.count(s->Get(i)) == 1);
         }
@@ -78,7 +78,7 @@ BOOST_AUTO_TEST_CASE(FewBatchesTest)
 
     auto s = kv_storage::CreateVolume(volumeDir);
 
-    for (int i = 0; i < 20000; i++)
+    for (int i = 0; i < 200000; i++)
     {
         BOOST_TEST(keys.count(s->Get(i)) == 1);
     }
@@ -92,7 +92,7 @@ BOOST_AUTO_TEST_CASE(DeleteTest)
     std::vector<int> keys;
 
     {
-        const int count = 1000;
+        const int count = 5000;
 
         auto s = kv_storage::CreateVolume(volumeDir);
 
@@ -119,5 +119,44 @@ BOOST_AUTO_TEST_CASE(DeleteTest)
                 BOOST_TEST(s->Get(keys[j]) == "value" + std::to_string(keys[j]));
             }
         }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(MillionsTest)
+{
+    fs::path volumeDir("vol");
+    fs::remove_all(volumeDir);
+
+    const auto count = 1000000;
+    std::string value = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    {
+        auto s = kv_storage::CreateVolume(volumeDir);
+
+        {
+            std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+            for (int i = 0; i < count; i++)
+            {
+                s->Put(i, value);
+            }
+
+            std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+            std::cout << "Time elapsed for inserting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+        }
+    }
+
+    {
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+        auto s = kv_storage::CreateVolume(volumeDir);
+
+        for (int i = 0; i < count; i++)
+        {
+            BOOST_TEST(s->Get(i) == value);
+        }
+
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        std::cout << "Time elapsed for getting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
     }
 }

@@ -47,7 +47,7 @@ std::string VolumeImpl::Get(const Key& key)
 
 VolumeImpl::VolumeImpl(const fs::path& directory)
     : m_dir(directory)
-    , m_cache(100)
+    , m_cache(10000)
 {
     if (!fs::exists(m_dir / "batch_1.dat"))
     {
@@ -57,8 +57,6 @@ VolumeImpl::VolumeImpl(const fs::path& directory)
     else
     {
         m_root = CreateBPNode(m_dir, m_cache, 1);
-
-        const auto batchFileFormat = std::regex("batch_\\d+\\.dat");
     }
     m_cache.insert(1, m_root);
     m_nodesCount = 1;

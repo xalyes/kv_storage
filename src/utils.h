@@ -58,7 +58,7 @@ inline FileIndex FindFreeIndex(const fs::path& dir, FileIndex begin)
     auto index = begin;
     while (true)
     {
-        if (!fs::exists(dir / ("batch_" + std::to_string(++index) + ".dat")))
+        if (!fs::exists(dir / ("batch_" + std::to_string(++index) + ".dat")) && index != 0 && index != 1)
             return index;
     }
 }
