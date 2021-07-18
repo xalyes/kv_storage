@@ -26,6 +26,7 @@ public:
     virtual std::string Get(Key key) const override;
     virtual DeleteResult Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) override;
     virtual Key GetMinimum() const override;
+    virtual std::shared_ptr<BPNode> GetFirstLeaf() override;
 
 private:
     uint32_t FindKeyPosition(Key key) const;

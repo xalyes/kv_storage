@@ -92,7 +92,7 @@ BOOST_AUTO_TEST_CASE(DeleteTest)
     std::vector<int> keys;
 
     {
-        const int count = 5000;
+        const int count = 40000;
 
         auto s = kv_storage::CreateVolume(volumeDir);
 
@@ -111,18 +111,79 @@ BOOST_AUTO_TEST_CASE(DeleteTest)
 
         for (int i = 0; i < count; i++)
         {
-            std::cout << "Deleting " << keys[i] << std::endl;
+            //std::cout << "Deleting " << keys[i] << std::endl;
             s->Delete(keys[i]);
 
-            for (int j = i + 1; j < count; j++)
+            if (i % 50 == 0)
             {
-                BOOST_TEST(s->Get(keys[j]) == "value" + std::to_string(keys[j]));
+                for (int j = i + 1; j < count; j++)
+                {
+                    BOOST_TEST(s->Get(keys[j]) == "value" + std::to_string(keys[j]));
+                }
             }
         }
     }
 }
 
-BOOST_AUTO_TEST_CASE(MillionsTest)
+BOOST_AUTO_TEST_CASE(EnumeratorTest)
+{
+    fs::path volumeDir("vol");
+    fs::remove_all(volumeDir);
+
+    auto s = kv_storage::CreateVolume(volumeDir);
+
+    std::vector<int> keys;
+    const int count = 10000;
+
+    for (int i = 0; i < count; i++)
+    {
+        s->Put(i, "value" + std::to_string(i));
+        keys.push_back(i);
+    }
+
+    {
+        auto enumerator = s->Enumerate();
+
+        for (auto k : keys)
+        {
+            BOOST_TEST(enumerator->MoveNext() == true);
+            auto kv = enumerator->GetCurrent();
+            BOOST_TEST(kv.first == k);
+            BOOST_TEST(kv.second == "value" + std::to_string(k));
+        }
+
+        BOOST_TEST(enumerator->MoveNext() == false);
+    }
+
+    std::random_device rd;
+    const uint32_t seed = rd();
+    std::cout << "seed: " << seed << std::endl;
+    std::mt19937 rng(seed);
+
+    std::shuffle(keys.begin(), keys.end(), rng);
+
+    for (int i = 0; i < count / 2; i++)
+    {
+        s->Delete(keys[i]);
+    }
+
+    keys.erase(keys.begin(), keys.begin() + count / 2);
+    std::sort(keys.begin(), keys.end());
+
+    auto enumerator = s->Enumerate();
+
+    for (auto k : keys)
+    {
+        BOOST_TEST(enumerator->MoveNext() == true);
+        auto kv = enumerator->GetCurrent();
+        BOOST_TEST(kv.first == k);
+        BOOST_TEST(kv.second == "value" + std::to_string(k));
+    }
+
+    BOOST_TEST(enumerator->MoveNext() == false);
+}
+
+BOOST_AUTO_TEST_CASE(MillionTest)
 {
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);

@@ -234,18 +234,17 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
     else // MergedLeft
     {
         // 4.4 Key deleted but left sibling node has been merged with the child node.
-        // Removing merged sibling.
-        if (childPos > 1)
+        // Original child index has been changed. Removing merged sibling.
+
+        m_cache.insert(foundChild->GetIndex(), foundChild);
+
+        if (childPos > 2)
         {
-            m_keys[childPos - 1] = *result.key;
-            RemoveFromArray(m_keys, childPos - 2);
-            RemoveFromArray(m_ptrs, childPos - 1);
+            m_keys[childPos - 2] = *result.key;
         }
-        else if (childPos == 1)
-        {
-            RemoveFromArray(m_keys, 0);
-            RemoveFromArray(m_ptrs, 0);
-        }
+
+        RemoveFromArray(m_keys, childPos - 1 );
+        RemoveFromArray(m_ptrs, childPos);
     }
     m_keyCount--;
 
@@ -254,6 +253,7 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
     if (m_index == 1 && m_keyCount == 0)
     {
         Remove(m_dir, foundChild->GetIndex());
+        m_cache.erase(foundChild->GetIndex());
         foundChild->SetIndex(1);
         foundChild->Flush();
         return { result.type, std::nullopt, std::move(foundChild) };
@@ -336,8 +336,12 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
 
         m_keyCount += leftSiblingNode->m_keyCount;
 
+        const auto currentIndex = m_index;
+        m_index = leftSiblingNode->GetIndex();
+
         Flush();
-        Remove(m_dir, leftSiblingNode->GetIndex());
+        Remove(m_dir, currentIndex);
+        m_cache.erase(currentIndex);
 
         return { DeleteResult::Type::MergedLeft, GetMinimum() };
     }
@@ -359,6 +363,7 @@ DeleteResult Node::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
 
         Flush();
         Remove(m_dir, rightSiblingNode->GetIndex());
+        m_cache.erase(rightSiblingNode->GetIndex());
         return { DeleteResult::Type::MergedRight, GetMinimum() };
     }
     else
@@ -371,6 +376,12 @@ Key Node::GetMinimum() const
 {
     auto child = CreateBPNode(m_dir, m_cache, m_ptrs[0]);
     return child->GetMinimum();
+}
+
+std::shared_ptr<BPNode> Node::GetFirstLeaf()
+{
+    auto child = CreateBPNode(m_dir, m_cache, m_ptrs[0]);
+    return child->GetFirstLeaf();
 }
 
 void Node::Load()

@@ -2,10 +2,47 @@
 
 #include "bp_node.h"
 #include "node.h"
+#include "leaf.h"
 #include "volume_impl.h"
 
 namespace kv_storage {
 
+VolumeEnumeratorImpl::VolumeEnumeratorImpl(const fs::path& directory, BPCache& cache, std::shared_ptr<BPNode> firstBatch)
+    : m_dir(directory)
+    , m_cache(cache)
+    , m_currentBatch(std::static_pointer_cast<Leaf>(firstBatch))
+{}
+
+bool VolumeEnumeratorImpl::MoveNext()
+{
+    if (!isValid)
+        return false;
+
+    m_counter++;
+    if (m_counter == m_currentBatch->GetKeyCount())
+    {
+        if (!m_currentBatch->m_nextBatch)
+        {
+            isValid = false;
+            return false;
+        }
+
+        auto nextBatch = m_currentBatch->m_nextBatch;
+
+        m_currentBatch = std::static_pointer_cast<Leaf>(CreateBPNode(m_dir, m_cache, nextBatch));
+        m_counter = 0;
+        return true;
+    }
+    else
+    {
+        return true;
+    }
+}
+
+std::pair<Key, std::string> VolumeEnumeratorImpl::GetCurrent()
+{
+    return { m_currentBatch->m_keys[m_counter], m_currentBatch->m_values[m_counter] };
+}
 
 void VolumeImpl::Put(const Key& key, const std::string& value)
 {
@@ -60,6 +97,11 @@ VolumeImpl::VolumeImpl(const fs::path& directory)
     }
     m_cache.insert(1, m_root);
     m_nodesCount = 1;
+}
+
+std::unique_ptr<VolumeEnumerator> VolumeImpl::Enumerate()
+{
+    return std::make_unique<VolumeEnumeratorImpl>(m_dir, m_cache, m_root->GetFirstLeaf());
 }
 
 std::unique_ptr<Volume> CreateVolume(const std::filesystem::path& volumeDirectory)

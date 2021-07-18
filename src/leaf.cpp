@@ -137,6 +137,7 @@ void Leaf::LeftJoin(const Leaf& leaf)
     m_keys = std::move(newKeys);
     m_values.insert(m_values.begin(), leaf.m_values.begin(), leaf.m_values.end());
     m_keyCount += leaf.m_keyCount;
+    m_index = leaf.m_index;
 }
 
 void Leaf::RightJoin(const Leaf& leaf)
@@ -208,9 +209,11 @@ DeleteResult Leaf::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
             // 5. Both siblngs have too few keys. We should merge this leaf and sibling.
             if (leftSibling)
             {
+                const auto currentIndex = m_index;
                 LeftJoin(*leftSiblingLeaf);
                 Flush();
-                Remove(m_dir, leftSiblingLeaf->GetIndex());
+                Remove(m_dir, currentIndex);
+                m_cache.erase(currentIndex);
 
                 return { DeleteResult::Type::MergedLeft, m_keys[0] };
             }
@@ -219,6 +222,7 @@ DeleteResult Leaf::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
                 RightJoin(*rightSiblingLeaf);
                 Flush();
                 Remove(m_dir, rightSiblingLeaf->GetIndex());
+                m_cache.erase(rightSiblingLeaf->GetIndex());
 
                 return { DeleteResult::Type::MergedRight, m_keys[0] };
             }
@@ -235,6 +239,11 @@ DeleteResult Leaf::Delete(Key key, std::optional<Sibling> leftSibling, std::opti
 Key Leaf::GetMinimum() const
 {
     return m_keys[0];
+}
+
+std::shared_ptr<BPNode> Leaf::GetFirstLeaf()
+{
+    return shared_from_this();
 }
 
 void Leaf::Load()

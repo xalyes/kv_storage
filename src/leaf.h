@@ -9,9 +9,13 @@ namespace kv_storage {
 
 using Offset = uint64_t;
 
-class Leaf : public BPNode
+class Leaf
+    : public BPNode
+    , public std::enable_shared_from_this<BPNode>
 {
 public:
+    friend class VolumeEnumeratorImpl;
+
     Leaf(const fs::path& dir, BPCache& cache, FileIndex idx)
         : BPNode(dir, cache, idx)
     {
@@ -29,6 +33,7 @@ public:
     virtual std::string Get(Key key) const override;
     virtual DeleteResult Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) override;
     virtual Key GetMinimum() const override;
+    virtual std::shared_ptr<BPNode> GetFirstLeaf() override;
 
 private:
     CreatedBPNode SplitAndPut(Key key, const std::string& value, FileIndex& nodesCount);

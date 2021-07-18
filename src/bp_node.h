@@ -7,9 +7,7 @@
 #include <optional>
 #include <filesystem>
 
-#include <boost/compute/detail/lru_cache.hpp>
-
-namespace fs = std::filesystem;
+#include "utils.h"
 
 namespace kv_storage {
 
@@ -21,16 +19,15 @@ constexpr uint32_t Half(uint32_t num)
         return (num - 1) / 2;
 }
 
-constexpr size_t B = 150;
+constexpr size_t B = 200;
 constexpr size_t MaxKeys = B - 1;
 constexpr size_t MinKeys = Half(B);
 
 using Key = uint64_t;
-using FileIndex = uint64_t;
 
 class BPNode;
 
-using BPCache = boost::compute::detail::lru_cache<FileIndex, std::shared_ptr<BPNode>>;
+using BPCache = lru_cache<FileIndex, std::shared_ptr<BPNode>>;
 
 struct CreatedBPNode;
 struct DeleteResult;
@@ -67,6 +64,7 @@ public:
     virtual std::optional<CreatedBPNode> Put(Key key, const std::string& value, FileIndex& nodesCount) = 0;
     virtual std::string Get(Key key) const = 0;
     virtual DeleteResult Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) = 0;
+    virtual std::shared_ptr<BPNode> GetFirstLeaf() = 0;
     virtual Key GetMinimum() const = 0;
     virtual uint32_t GetKeyCount() const;
     virtual Key GetLastKey() const;
