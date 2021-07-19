@@ -8,12 +8,9 @@ find_package(Boost)
 include_directories(${Boost_INCLUDE_DIRS} include)
 
 set (SOURCES
-    src/volume_impl.h
-    src/volume_impl.cpp
-    src/bp_node.cpp
     src/bp_node.h
-    src/node.cpp
     src/node.h
+    src/node.cpp
     src/leaf.cpp
     src/leaf.h
     src/utils.h

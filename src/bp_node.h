@@ -1,15 +1,11 @@
 #ifndef BP_NODE_H
 #define BP_NODE_H
 
-#include <array>
-#include <string>
-#include <memory>
-#include <optional>
-#include <filesystem>
-
 #include "utils.h"
 
 namespace kv_storage {
+
+using Key = uint64_t;
 
 constexpr uint32_t Half(uint32_t num)
 {
@@ -23,14 +19,36 @@ constexpr size_t B = 200;
 constexpr size_t MaxKeys = B - 1;
 constexpr size_t MinKeys = Half(B);
 
-using Key = uint64_t;
-
+template<class V>
 class BPNode;
 
-using BPCache = lru_cache<FileIndex, std::shared_ptr<BPNode>>;
+template<class V>
+using BPCache = lru_cache<FileIndex, std::shared_ptr<BPNode<V>>>;
 
-struct CreatedBPNode;
-struct DeleteResult;
+// ptr to new created BPNode & key to be inserted to parent node
+template<class V>
+struct CreatedBPNode
+{
+    std::shared_ptr<BPNode<V>> node;
+    Key key;
+};
+
+enum class DeleteType
+{
+    Deleted,
+    BorrowedRight,
+    BorrowedLeft,
+    MergedLeft,
+    MergedRight
+};
+
+template<class V>
+struct DeleteResult
+{
+    DeleteType type;
+    std::optional<Key> key;
+    std::shared_ptr<BPNode<V>> node;
+};
 
 struct Sibling
 {
@@ -38,10 +56,11 @@ struct Sibling
     FileIndex index;
 };
 
+template<class V>
 class BPNode
 {
 public:
-    BPNode(const fs::path& dir, BPCache& cache, FileIndex idx)
+    BPNode(const fs::path& dir, BPCache<V>& cache, FileIndex idx)
         : m_dir(dir)
         , m_cache(cache)
         , m_index(idx)
@@ -49,7 +68,7 @@ public:
         m_keys.fill(0);
     }
 
-    BPNode(const fs::path& dir, BPCache& cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys)
+    BPNode(const fs::path& dir, BPCache<V>& cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys)
         : m_dir(dir)
         , m_cache(cache)
         , m_index(idx)
@@ -61,9 +80,9 @@ public:
 
     virtual void Load() = 0;
     virtual void Flush() = 0;
-    virtual std::optional<CreatedBPNode> Put(Key key, const std::string& value, FileIndex& nodesCount) = 0;
+    virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& value, FileIndex& nodesCount) = 0;
     virtual std::string Get(Key key) const = 0;
-    virtual DeleteResult Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) = 0;
+    virtual DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) = 0;
     virtual std::shared_ptr<BPNode> GetFirstLeaf() = 0;
     virtual Key GetMinimum() const = 0;
     virtual uint32_t GetKeyCount() const;
@@ -73,39 +92,35 @@ public:
 
 protected:
     const fs::path m_dir;
-    BPCache& m_cache;
+    BPCache<V>& m_cache;
     FileIndex m_index{ 0 };
     uint32_t m_keyCount{ 0 };
     std::array<Key, MaxKeys> m_keys;
 };
 
-// ptr to new created BPNode & key to be inserted to parent node
-struct CreatedBPNode
+template<class V>
+uint32_t BPNode<V>::GetKeyCount() const
 {
-    std::shared_ptr<BPNode> node;
-    Key key;
-};
+    return m_keyCount;
+}
 
-struct DeleteResult
+template<class V>
+Key BPNode<V>::GetLastKey() const
 {
-public:
-    enum class Type
-    {
-        Deleted,
-        BorrowedRight,
-        BorrowedLeft,
-        MergedLeft,
-        MergedRight
-    };
+    return m_keys[m_keyCount - 1];
+}
 
-    Type type;
-    std::optional<Key> key;
-    std::shared_ptr<BPNode> node;
-};
+template<class V>
+FileIndex BPNode<V>::GetIndex() const
+{
+    return m_index;
+}
 
-std::shared_ptr<BPNode> CreateEmptyBPNode(const fs::path& dir, BPCache& cache, FileIndex idx);
-
-std::shared_ptr<BPNode> CreateBPNode(const fs::path& dir, BPCache& cache, FileIndex idx);
+template<class V>
+void BPNode<V>::SetIndex(FileIndex index)
+{
+    m_index = index;
+}
 
 } // kv_storage
 

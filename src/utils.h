@@ -5,6 +5,7 @@
 #include <list>
 #include <array>
 #include <optional>
+#include <filesystem>
 
 namespace fs = std::filesystem;
 
