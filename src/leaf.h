@@ -3,6 +3,7 @@
 
 #include <fstream>
 #include <optional>
+#include <type_traits>
 
 #include "bp_node.h"
 
@@ -29,8 +30,8 @@ public:
         , m_nextBatch(newNextBatch)
     {}
 
-    virtual void Load() override;
     virtual void Flush() override;
+    virtual void Load() override;
     virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& val, FileIndex& nodesCount) override;
     virtual V Get(Key key) const override;
     virtual DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) override;
@@ -42,6 +43,72 @@ private:
     void LeftJoin(const Leaf<V>& leaf);
     void RightJoin(const Leaf<V>& leaf);
     void Insert(Key key, const V& value, uint32_t pos);
+
+    template<class V>
+    typename std::enable_if<
+        std::is_same<V, float>::value
+     || std::is_same<V, uint32_t>::value
+     || std::is_same<V, uint64_t>::value
+     || std::is_same<V, double>::value, void>::type
+        ReadValues(std::ifstream& in)
+    {
+        uint32_t sz = static_cast<uint32_t>(sizeof(V)) * m_keyCount;
+        m_values.resize(sz);
+        in.read(reinterpret_cast<char*>(m_values.data()), sz);
+
+        for (uint32_t i = 0; i < m_keyCount; i++)
+        {
+            LittleToNativeEndianInplace(m_values[i]);
+        }
+    }
+
+    template<class V>
+    typename std::enable_if<
+        std::is_same<V, std::string>::value
+     || std::is_same<V, std::vector<char>>::value, void>::type
+        ReadValues(std::ifstream& in)
+    {
+        for (uint32_t i = 0; i < m_keyCount; i++)
+        {
+            uint32_t size;
+            in.read(reinterpret_cast<char*>(&size), sizeof(size));
+            boost::endian::little_to_native_inplace(size);
+
+            auto buf = std::make_unique<char[]>(size + 1);
+            in.read(buf.get(), size);
+            buf.get()[size] = '\0';
+            m_values.emplace_back(buf.get());
+        }
+    }
+
+    template<class V>
+    typename std::enable_if<
+        std::is_same<V, float>::value
+     || std::is_same<V, uint32_t>::value
+     || std::is_same<V, uint64_t>::value
+     || std::is_same<V, double>::value, void>::type
+        WriteValues(std::ofstream& out)
+    {
+        for (uint32_t i = 0; i < m_values.size(); i++)
+        {
+            auto val = NativeToLittleEndian(m_values[i]);
+            out.write(reinterpret_cast<char*>(&val), sizeof(val));
+        }
+    }
+
+    template<class V>
+    typename std::enable_if<
+        std::is_same<V, std::string>::value
+     || std::is_same<V, std::vector<char>>::value, void>::type
+        WriteValues(std::ofstream& out)
+    {
+        for (uint32_t i = 0; i < m_keyCount; i++)
+        {
+            uint32_t size = boost::endian::native_to_little(m_values[i].size());
+            out.write(reinterpret_cast<char*>(&size), sizeof(size));
+            out.write(m_values[i].data(), m_values[i].size());
+        }
+    }
 
 private:
     std::vector<V> m_values;
@@ -119,10 +186,8 @@ CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, FileIndex& nodesC
 
     std::array<Key, MaxKeys> newKeys;
     newKeys.fill(0);
-    std::array<Offset, MaxKeys> newOffsets;
-    newOffsets.fill(0);
 
-    std::vector<std::string> newValues;
+    std::vector<V> newValues;
 
     uint32_t borderIndex = m_values.size() - copyCount;
 
@@ -131,13 +196,10 @@ CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, FileIndex& nodesC
     m_values.erase(m_values.begin() + borderIndex, m_values.end());
 
     std::swap(m_keys[borderIndex], newKeys[0]);
-    newOffsets[0] = sizeof(m_keyCount) + sizeof(m_keys) + sizeof(m_keys) + 1;
 
     for (uint32_t i = borderIndex + 1; i < MaxKeys; i++)
     {
         std::swap(m_keys[i], newKeys[i - borderIndex]);
-
-        newOffsets[i - borderIndex] = newOffsets[i - borderIndex - 1] + newValues[i - borderIndex - 1].size();
     }
 
     m_keyCount -= copyCount;
@@ -298,6 +360,56 @@ template <class V>
 Key Leaf<V>::GetMinimum() const
 {
     return m_keys[0];
+}
+
+template<class V>
+void Leaf<V>::Flush()
+{
+    std::ofstream out;
+    out.exceptions(~std::ofstream::goodbit);
+    out.open(m_dir / ("batch_" + std::to_string(m_index) + ".dat"), std::ios::out | std::ios::binary | std::ios::trunc);
+
+    out.write("9", 1);
+
+    auto keyCount = boost::endian::native_to_little(m_keyCount);
+    out.write(reinterpret_cast<char*>(&keyCount), sizeof(keyCount));
+
+    for (uint32_t i = 0; i < m_keys.size(); i++)
+    {
+        auto key = boost::endian::native_to_little(m_keys[i]);
+        out.write(reinterpret_cast<char*>(&key), sizeof(key));
+    }
+
+    WriteValues<V>(out);
+
+    auto nextBatch = boost::endian::native_to_little(m_nextBatch);
+    out.write(reinterpret_cast<char*>(&(nextBatch)), sizeof(nextBatch));
+}
+
+template<class V>
+void Leaf<V>::Load()
+{
+    std::ifstream in;
+    in.exceptions(~std::ofstream::goodbit);
+    in.open(m_dir / ("batch_" + std::to_string(m_index) + ".dat"), std::ios::in | std::ios::binary);
+
+    // TODO: check first char is "9"
+    in.seekg(1);
+
+    in.read(reinterpret_cast<char*>(&(m_keyCount)), sizeof(m_keyCount));
+    in.read(reinterpret_cast<char*>(&(m_keys)), sizeof(m_keys));
+
+    boost::endian::little_to_native_inplace(m_keyCount);
+
+    for (uint32_t i = 0; i < m_keys.size(); i++)
+    {
+        boost::endian::little_to_native_inplace(m_keys[i]);
+    }
+
+    ReadValues<V>(in);
+
+    in.read(reinterpret_cast<char*>(&(m_nextBatch)), sizeof(m_nextBatch));
+    boost::endian::little_to_native_inplace(m_nextBatch);
 }
 
 } // kv_storage

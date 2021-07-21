@@ -221,3 +221,52 @@ BOOST_AUTO_TEST_CASE(MillionTest)
         std::cout << "Time elapsed for getting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
     }
 }
+
+BOOST_AUTO_TEST_CASE(FloatsTest)
+{
+    fs::path volumeDir("vol");
+    fs::remove_all(volumeDir);
+
+    const auto count = 100000;
+
+    auto floatingTest = [&](auto dummy)
+    {
+        {
+            auto s = kv_storage::Volume<decltype(dummy)>(volumeDir);
+
+            {
+                std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+                for (int i = 0; i < count; i++)
+                {
+                    decltype(dummy) key = static_cast<decltype(dummy)>(i) / count;
+                    s.Put(i, key);
+                }
+
+                std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+                std::cout << "Time elapsed for inserting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+            }
+        }
+
+        {
+            std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+            auto s = kv_storage::Volume<decltype(dummy)>(volumeDir);
+
+            for (int i = 0; i < count; i++)
+            {
+                decltype(dummy) key = s.Get(i);
+                BOOST_TEST(key == static_cast<decltype(dummy)>(i) / count);
+            }
+
+            std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+            std::cout << "Time elapsed for getting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+        }
+    };
+
+    floatingTest(1.0f);
+
+    fs::remove_all(volumeDir);
+
+    floatingTest((double)1.0);
+}

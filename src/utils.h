@@ -6,6 +6,7 @@
 #include <array>
 #include <optional>
 #include <filesystem>
+#include <boost/endian/conversion.hpp>
 
 namespace fs = std::filesystem;
 
@@ -74,6 +75,42 @@ inline FileIndex FindFreeIndex(const fs::path& dir, FileIndex begin)
 inline void Remove(const fs::path& dir, FileIndex index)
 {
     fs::remove(dir / ("batch_" + std::to_string(index) + ".dat"));
+}
+
+template <typename T>
+T NativeToLittleEndian(T val)
+{
+    if (boost::endian::order::native == boost::endian::order::big)
+    {
+        T res;
+        char* pVal = (char*)&val;
+        char* pRes = (char*)&res;
+        int size = sizeof(T);
+        for (int i = 0; i < size; i++)
+        {
+            pRes[size - 1 - i] = pVal[i];
+        }
+
+        return res;
+    }
+    else
+    {
+        return val;
+    }
+}
+
+template <typename T>
+void LittleToNativeEndianInplace(T& val)
+{
+    if (boost::endian::order::native == boost::endian::order::big)
+    {
+        char* pVal = (char*)&val;
+        int size = sizeof(T);
+        for (int i = 0; i < size; i++)
+        {
+            pVal[size - 1 - i] = pVal[i];
+        }
+    }
 }
 
 // a cache which evicts the least recently used item when it is full
