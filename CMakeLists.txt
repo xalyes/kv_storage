@@ -15,6 +15,7 @@ set (SOURCES
     src/leaf.h
     src/utils.h
     include/kv_storage/volume.h
+    include/kv_storage/storage.h
 )
 
 set (CMAKE_CXX_STANDARD 17)

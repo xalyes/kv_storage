@@ -1,6 +1,8 @@
 #ifndef BP_NODE_H
 #define BP_NODE_H
 
+#include <optional>
+
 #include "utils.h"
 
 namespace kv_storage {
@@ -60,7 +62,7 @@ template<class V>
 class BPNode
 {
 public:
-    BPNode(const fs::path& dir, BPCache<V>& cache, FileIndex idx)
+    BPNode(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
         : m_dir(dir)
         , m_cache(cache)
         , m_index(idx)
@@ -68,7 +70,7 @@ public:
         m_keys.fill(0);
     }
 
-    BPNode(const fs::path& dir, BPCache<V>& cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys)
+    BPNode(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys)
         : m_dir(dir)
         , m_cache(cache)
         , m_index(idx)
@@ -81,7 +83,7 @@ public:
     virtual void Load() = 0;
     virtual void Flush() = 0;
     virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& value, FileIndex& nodesCount) = 0;
-    virtual V Get(Key key) const = 0;
+    virtual std::optional<V> Get(Key key) const = 0;
     virtual DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) = 0;
     virtual std::shared_ptr<BPNode> GetFirstLeaf() = 0;
     virtual Key GetMinimum() const = 0;
@@ -92,7 +94,7 @@ public:
 
 protected:
     const fs::path m_dir;
-    BPCache<V>& m_cache;
+    std::weak_ptr<BPCache<V>> m_cache;
     FileIndex m_index{ 0 };
     uint32_t m_keyCount{ 0 };
     std::array<Key, MaxKeys> m_keys;

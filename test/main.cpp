@@ -15,6 +15,7 @@
 #include <set>
 
 #include <kv_storage/volume.h>
+#include <kv_storage/storage.h>
 
 namespace fs = std::filesystem;
 
@@ -30,14 +31,14 @@ BOOST_AUTO_TEST_CASE(BasicTest)
         s.Put(30, "ololo322");
         s.Put(1, "ololo4222");
 
-        BOOST_TEST(s.Get(33) == "ololo");
-        BOOST_TEST(s.Get(44) == "ololo2");
+        BOOST_TEST(*s.Get(33) == "ololo");
+        BOOST_TEST(*s.Get(44) == "ololo2");
     }
     
     auto s = kv_storage::Volume<std::string>(volumeDir);
 
-    BOOST_TEST(s.Get(33) == "ololo");
-    BOOST_TEST(s.Get(44) == "ololo2");
+    BOOST_TEST(*s.Get(33) == "ololo");
+    BOOST_TEST(*s.Get(44) == "ololo2");
 }
 
 BOOST_AUTO_TEST_CASE(FewBatchesTest)
@@ -72,7 +73,7 @@ BOOST_AUTO_TEST_CASE(FewBatchesTest)
 
         for (int i = 0; i < 200000; i++)
         {
-            BOOST_TEST(keys.count(s.Get(i)) == 1);
+            BOOST_TEST(keys.count(*s.Get(i)) == 1);
         }
     }
 
@@ -80,7 +81,7 @@ BOOST_AUTO_TEST_CASE(FewBatchesTest)
 
     for (int i = 0; i < 200000; i++)
     {
-        BOOST_TEST(keys.count(s.Get(i)) == 1);
+        BOOST_TEST(keys.count(*s.Get(i)) == 1);
     }
 }
 
@@ -118,7 +119,7 @@ BOOST_AUTO_TEST_CASE(DeleteTest)
             {
                 for (int j = i + 1; j < count; j++)
                 {
-                    BOOST_TEST(s.Get(keys[j]) == "value" + std::to_string(keys[j]));
+                    BOOST_TEST(*s.Get(keys[j]) == "value" + std::to_string(keys[j]));
                 }
             }
         }
@@ -214,7 +215,7 @@ BOOST_AUTO_TEST_CASE(MillionTest)
 
         for (int i = 0; i < count; i++)
         {
-            BOOST_TEST(s.Get(i) == value);
+            BOOST_TEST(*s.Get(i) == value);
         }
 
         std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
@@ -255,7 +256,7 @@ BOOST_AUTO_TEST_CASE(FloatsTest)
 
             for (int i = 0; i < count; i++)
             {
-                decltype(dummy) key = s.Get(i);
+                decltype(dummy) key = *s.Get(i);
                 BOOST_TEST(key == static_cast<decltype(dummy)>(i) / count);
             }
 
@@ -269,4 +270,46 @@ BOOST_AUTO_TEST_CASE(FloatsTest)
     fs::remove_all(volumeDir);
 
     floatingTest((double)1.0);
+}
+
+BOOST_AUTO_TEST_CASE(ManyVolumesTest)
+{
+    std::vector<kv_storage::Volume<std::string>> volumes;
+
+    for (int i = 0; i < 11; i++)
+    {
+        fs::path volumeDir("vol" + std::to_string(i));
+        fs::remove_all(volumeDir);
+
+        volumes.emplace_back(volumeDir);
+
+        for (int j = i*10000; j < (i+1)*10000; j++)
+        {
+            volumes[i].Put(j, "value" + std::to_string(j));
+        }
+    }
+
+    kv_storage::StorageNode<std::string> storageRoot;
+    storageRoot.Mount(volumes[0]);
+    storageRoot.Mount(volumes[1]);
+    auto child1 = storageRoot.CreateChildNode();
+    child1->Mount(volumes[2]);
+    child1->Mount(volumes[3]);
+    child1->Mount(volumes[4]);
+    auto child2 = child1->CreateChildNode();
+    auto child3 = child2->CreateChildNode();
+    child3->Mount(volumes[5]);
+    child3->Mount(volumes[6]);
+    child3->Mount(volumes[7]);
+    auto child4 = child2->CreateChildNode();
+    child4->Mount(volumes[8]);
+    child4->Mount(volumes[9]);
+    child4->Mount(volumes[10]);
+
+    for (int i = 0; i < 110000; i++)
+    {
+        auto found = storageRoot.Get(i);
+        BOOST_TEST(found.size() == 1);
+        BOOST_TEST(found[0] == "value" + std::to_string(i));
+    }
 }

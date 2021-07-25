@@ -19,12 +19,12 @@ class Leaf
 public:
     template<class V> friend class VolumeEnumerator;
 
-    Leaf(const fs::path& dir, BPCache<V>& cache, FileIndex idx)
+    Leaf(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
         : BPNode(dir, cache, idx)
     {
     }
 
-    Leaf(const fs::path& dir, BPCache<V>& cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::vector<V>&& newValues, FileIndex newNextBatch)
+    Leaf(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::vector<V>&& newValues, FileIndex newNextBatch)
         : BPNode<V>(dir, cache, idx, newKeyCount, std::move(newKeys))
         , m_values(newValues)
         , m_nextBatch(newNextBatch)
@@ -33,7 +33,7 @@ public:
     virtual void Flush() override;
     virtual void Load() override;
     virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& val, FileIndex& nodesCount) override;
-    virtual V Get(Key key) const override;
+    virtual std::optional<V> Get(Key key) const override;
     virtual DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) override;
     virtual Key GetMinimum() const override;
     virtual std::shared_ptr<BPNode<V>> GetFirstLeaf() override;
@@ -208,7 +208,7 @@ CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, FileIndex& nodesC
 
     nodesCount = FindFreeIndex(m_dir, nodesCount);
     auto newLeaf = std::make_shared<Leaf>(m_dir, m_cache, nodesCount, copyCount, std::move(newKeys), std::move(newValues), m_nextBatch);
-    m_cache.insert(nodesCount, newLeaf);
+    m_cache.lock()->insert(nodesCount, newLeaf);
 
     m_nextBatch = newLeaf->m_index;
 
@@ -227,7 +227,7 @@ CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, FileIndex& nodesC
 }
 
 template<class V>
-V Leaf<V>::Get(Key key) const
+std::optional<V> Leaf<V>::Get(Key key) const
 {
     for (size_t i = 0; i < m_keyCount; i++)
     {
@@ -237,7 +237,7 @@ V Leaf<V>::Get(Key key) const
         }
     }
 
-    throw std::runtime_error("Failed to get unexisted value of key '" + std::to_string(key) + "'");
+    return std::nullopt;
 }
 
 template<class V>
@@ -333,7 +333,7 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
                 LeftJoin(*leftSiblingLeaf);
                 Flush();
                 Remove(m_dir, currentIndex);
-                m_cache.erase(currentIndex);
+                m_cache.lock()->erase(currentIndex);
 
                 return { DeleteType::MergedLeft, m_keys[0] };
             }
@@ -342,7 +342,7 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
                 RightJoin(*rightSiblingLeaf);
                 Flush();
                 Remove(m_dir, rightSiblingLeaf->GetIndex());
-                m_cache.erase(rightSiblingLeaf->GetIndex());
+                m_cache.lock()->erase(rightSiblingLeaf->GetIndex());
 
                 return { DeleteType::MergedRight, m_keys[0] };
             }

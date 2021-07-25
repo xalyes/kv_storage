@@ -13,13 +13,13 @@ template<class V>
 class Node : public BPNode<V>
 {
 public:
-    Node(const fs::path& dir, BPCache<V>& cache, FileIndex idx)
+    Node(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
         : BPNode(dir, cache, idx)
     {
         m_ptrs.fill(0);
     }
 
-    Node(const fs::path& dir, BPCache<V>& cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<FileIndex, B>&& newPtrs)
+    Node(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<FileIndex, B>&& newPtrs)
         : BPNode<V>(dir, cache, idx, newKeyCount, std::move(newKeys))
         , m_ptrs(newPtrs)
     {}
@@ -27,7 +27,7 @@ public:
     virtual void Load() override;
     virtual void Flush() override;
     virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& value, FileIndex& nodesCount) override;
-    virtual V Get(Key key) const override;
+    virtual std::optional<V> Get(Key key) const override;
     virtual DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) override;
     virtual Key GetMinimum() const override;
     virtual std::shared_ptr<BPNode<V>> GetFirstLeaf() override;
@@ -132,7 +132,7 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex&
 
         nodesCount = FindFreeIndex(m_dir, nodesCount);
         auto newNode = std::make_shared<Node>(m_dir, m_cache, nodesCount, copyCount, std::move(newKeys), std::move(newPtrs));
-        m_cache.insert(nodesCount, newNode);
+        m_cache.lock()->insert(nodesCount, newNode);
 
         if (m_index == 1)
         {
@@ -186,7 +186,7 @@ uint32_t Node<V>::FindKeyPosition(Key key) const
 }
 
 template<class V>
-V Node<V>::Get(Key key) const
+std::optional<V> Node<V>::Get(Key key) const
 {
     auto foundChild = CreateBPNode<V>(m_dir, m_cache, m_ptrs[FindKeyPosition(key)]);
     return foundChild->Get(key);
@@ -273,7 +273,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         // 4.4 Key deleted but left sibling node has been merged with the child node.
         // Original child index has been changed. Removing merged sibling.
 
-        m_cache.insert(foundChild->GetIndex(), foundChild);
+        m_cache.lock()->insert(foundChild->GetIndex(), foundChild);
 
         if (childPos > 2)
         {
@@ -290,7 +290,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
     if (m_index == 1 && m_keyCount == 0)
     {
         Remove(m_dir, foundChild->GetIndex());
-        m_cache.erase(foundChild->GetIndex());
+        m_cache.lock()->erase(foundChild->GetIndex());
         foundChild->SetIndex(1);
         foundChild->Flush();
         return { result.type, std::nullopt, std::move(foundChild) };
@@ -378,7 +378,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
 
         Flush();
         Remove(m_dir, currentIndex);
-        m_cache.erase(currentIndex);
+        m_cache.lock()->erase(currentIndex);
 
         return { DeleteType::MergedLeft, GetMinimum() };
     }
@@ -400,7 +400,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
 
         Flush();
         Remove(m_dir, rightSiblingNode->GetIndex());
-        m_cache.erase(rightSiblingNode->GetIndex());
+        m_cache.lock()->erase(rightSiblingNode->GetIndex());
         return { DeleteType::MergedRight, GetMinimum() };
     }
     else
