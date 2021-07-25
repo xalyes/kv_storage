@@ -135,7 +135,6 @@ void Volume<V>::Put(const Key& key, const V& value)
     m_cache->insert(m_root->GetIndex(), m_root);
 
     m_root = std::make_unique<Node<V>>(m_dir, m_cache, 1, 1, std::move(keys), std::move(ptrs));
-    m_root->Flush();
     m_cache->insert(1, m_root);
 }
 
@@ -194,7 +193,7 @@ void Volume<V>::Delete(const Key& key)
 template<class V>
 Volume<V>::Volume(const fs::path& directory)
     : m_dir(directory)
-    , m_cache(std::make_shared<BPCache<V>>(10000))
+    , m_cache(std::make_shared<BPCache<V>>(5000))
 {
     if (!fs::exists(m_dir / "batch_1.dat"))
     {

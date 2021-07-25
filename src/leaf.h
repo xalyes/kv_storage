@@ -30,6 +30,8 @@ public:
         , m_nextBatch(newNextBatch)
     {}
 
+    virtual ~Leaf();
+
     virtual void Flush() override;
     virtual void Load() override;
     virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& val, FileIndex& nodesCount) override;
@@ -116,6 +118,12 @@ private:
 };
 
 template <class V>
+Leaf<V>::~Leaf()
+{
+    Flush();
+}
+
+template <class V>
 std::shared_ptr<BPNode<V>> Leaf<V>::GetFirstLeaf()
 {
     return shared_from_this();
@@ -127,6 +135,7 @@ void Leaf<V>::Insert(Key key, const V& value, uint32_t pos)
     InsertToArray(m_keys, pos, key);
     m_values.insert(m_values.begin() + pos, value);
     m_keyCount++;
+    m_dirty = true;
 }
 
 template<class V>
@@ -163,7 +172,7 @@ std::optional<CreatedBPNode<V>> Leaf<V>::Put(Key key, const V& val, FileIndex& n
                 {
                     throw std::runtime_error("Try to insert value to fullfilled Leaf");
                 }
-                Flush();
+
                 return std::nullopt;
             }
 
@@ -175,7 +184,7 @@ std::optional<CreatedBPNode<V>> Leaf<V>::Put(Key key, const V& val, FileIndex& n
 
         Insert(key, val, m_keyCount);
     }
-    Flush();
+
     return std::nullopt;
 }
 
@@ -215,11 +224,9 @@ CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, FileIndex& nodesC
     if (key < firstNewKey)
     {
         Put(key, value, nodesCount);
-        newLeaf->Flush();
     }
     else
     {
-        Flush();
         newLeaf->Put(key, value, nodesCount);
     }
 
@@ -282,12 +289,12 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
             RemoveFromArray(m_keys, i);
             m_values.erase(m_values.begin() + i);
             m_keyCount--;
+            m_dirty = true;
 
             // 2. Check key count.
             // If we have too few keys and this leaf is not root we should make some additional changes.
             if (m_index == 1 || m_keyCount >= MinKeys)
             {
-                Flush();
                 return { DeleteType::Deleted, std::nullopt };
             }
 
@@ -305,7 +312,6 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
                     auto value = leftSiblingLeaf->m_values[leftSiblingLeaf->m_keyCount - 1];
                     Insert(key, value, 0);
                     leftSiblingLeaf->Delete(key, std::nullopt, std::nullopt);
-                    Flush();
                     return { DeleteType::BorrowedLeft, m_keys[0] };
                 }
             }
@@ -321,7 +327,6 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
                     auto value = rightSiblingLeaf->m_values[0];
                     Insert(key, value, m_keyCount);
                     rightSiblingLeaf->Delete(key, std::nullopt, std::nullopt);
-                    Flush();
                     return { DeleteType::BorrowedRight, rightSiblingLeaf->m_keys[0] };
                 }
             }
@@ -331,7 +336,6 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
             {
                 const auto currentIndex = m_index;
                 LeftJoin(*leftSiblingLeaf);
-                Flush();
                 Remove(m_dir, currentIndex);
                 m_cache.lock()->erase(currentIndex);
 
@@ -340,7 +344,6 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
             else if (rightSibling)
             {
                 RightJoin(*rightSiblingLeaf);
-                Flush();
                 Remove(m_dir, rightSiblingLeaf->GetIndex());
                 m_cache.lock()->erase(rightSiblingLeaf->GetIndex());
 
@@ -365,6 +368,9 @@ Key Leaf<V>::GetMinimum() const
 template<class V>
 void Leaf<V>::Flush()
 {
+    if (!m_dirty)
+        return;
+
     std::ofstream out;
     out.exceptions(~std::ofstream::goodbit);
     out.open(m_dir / ("batch_" + std::to_string(m_index) + ".dat"), std::ios::out | std::ios::binary | std::ios::trunc);

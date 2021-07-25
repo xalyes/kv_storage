@@ -24,6 +24,8 @@ public:
         , m_ptrs(newPtrs)
     {}
 
+    virtual ~Node();
+
     virtual void Load() override;
     virtual void Flush() override;
     virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& value, FileIndex& nodesCount) override;
@@ -35,9 +37,14 @@ public:
 private:
     uint32_t FindKeyPosition(Key key) const;
 
-public:
     std::array<FileIndex, B> m_ptrs;
 };
+
+template <class V>
+Node<V>::~Node()
+{
+    Flush();
+}
 
 template <class V>
 std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex& nodesCount)
@@ -73,6 +80,7 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex&
         }
 
         m_keyCount -= copyCount;
+        m_dirty = true;
 
         const auto insert = [](uint32_t& count, std::array<Key, MaxKeys>& keys, std::array<FileIndex, B>& ptrs, Key newKey, FileIndex newIdx)
         {
@@ -140,13 +148,11 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex&
             m_index = nodesCount;
         }
 
-        newNode->Flush();
-        Flush();
-
         return std::optional<CreatedBPNode<V>>({ std::move(newNode), keyToDelete });
     }
     else
     {
+        m_dirty = true;
         Key keyForInsert = newNode.value().key;
 
         for (uint32_t i = 0; i < m_keyCount; i++)
@@ -156,7 +162,7 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex&
                 InsertToArray(m_keys, i, keyForInsert);
                 InsertToArray(m_ptrs, i + 1, newNode.value().node->GetIndex());
                 m_keyCount++;
-                Flush();
+
                 return std::nullopt;
             }
         }
@@ -165,7 +171,6 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex&
         InsertToArray(m_ptrs, m_keyCount + 1, newNode.value().node->GetIndex());
         m_keyCount++;
 
-        Flush();
         return std::nullopt;
     }
 }
@@ -231,8 +236,8 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         // Almost nothing to do. Updating key if need and returning.
         if (childPos && key == m_keys[childPos - 1])
         {
+            m_dirty = true;
             m_keys[childPos - 1] = foundChild->GetMinimum();
-            Flush();
         }
         return result;
     }
@@ -245,7 +250,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         else
             throw std::runtime_error("Bad tree status - leftmost child returned BorrowedLeft, but it is impossible.");
 
-        Flush();
+        m_dirty = true;
         return { DeleteType::Deleted };
     }
     else if (result.type == DeleteType::BorrowedRight)
@@ -253,13 +258,14 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         // 4.3 Key deleted and one key has been borrowed from right sibling.
         // Almost nothing to do. Updating key and returning.
         m_keys[childPos] = *result.key;
-        Flush();
+        m_dirty = true;
         return { DeleteType::Deleted };
     }
     else if (result.type == DeleteType::MergedRight)
     {
         // 4.4 Key deleted but right sibling node has been merged with the child node.
         // Removing merged sibling.
+        m_dirty = true;
         if (childPos > 1)
         {
             m_keys[childPos - 1] = *result.key;
@@ -273,6 +279,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         // 4.4 Key deleted but left sibling node has been merged with the child node.
         // Original child index has been changed. Removing merged sibling.
 
+        m_dirty = true;
         m_cache.lock()->insert(foundChild->GetIndex(), foundChild);
 
         if (childPos > 2)
@@ -284,6 +291,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         RemoveFromArray(m_ptrs, childPos);
     }
     m_keyCount--;
+    m_dirty = true;
 
     // 5. Special handling for situation when this node is root and child node has been merged with sibling.
     // Tree shrinked and child node becomes new root.
@@ -292,14 +300,12 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         Remove(m_dir, foundChild->GetIndex());
         m_cache.lock()->erase(foundChild->GetIndex());
         foundChild->SetIndex(1);
-        foundChild->Flush();
         return { result.type, std::nullopt, std::move(foundChild) };
     }
 
     // 6. Simple return if this node has enough keys or if it is root.
     if (m_keyCount >= MinKeys || m_index == 1)
     {
-        Flush();
         return { DeleteType::Deleted, std::nullopt, nullptr };
     }
 
@@ -316,12 +322,11 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
             RemoveFromArray(leftSiblingNode->m_keys, leftSiblingNode->m_keyCount - 1);
             RemoveFromArray(leftSiblingNode->m_ptrs, leftSiblingNode->m_keyCount);
             leftSiblingNode->m_keyCount--;
-            leftSiblingNode->Flush();
+            leftSiblingNode->m_dirty = true;
 
             InsertToArray(m_keys, 0, leftSibling->key);
             InsertToArray(m_ptrs, 0, ptr);
             m_keyCount++;
-            Flush();
 
             return { DeleteType::BorrowedLeft, GetMinimum() };
         }
@@ -340,12 +345,11 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
             RemoveFromArray(rightSiblingNode->m_keys, 0);
             RemoveFromArray(rightSiblingNode->m_ptrs, 0);
             rightSiblingNode->m_keyCount--;
-            rightSiblingNode->Flush();
+            rightSiblingNode->m_dirty = true;
 
             InsertToArray(m_keys, m_keyCount, rightSibling->key);
             InsertToArray(m_ptrs, m_keyCount + 1, ptr);
             m_keyCount++;
-            Flush();
 
             return { DeleteType::BorrowedRight, rightSiblingNode->GetMinimum() };
         }
@@ -376,7 +380,6 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         const auto currentIndex = m_index;
         m_index = leftSiblingNode->GetIndex();
 
-        Flush();
         Remove(m_dir, currentIndex);
         m_cache.lock()->erase(currentIndex);
 
@@ -398,7 +401,6 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         m_keyCount += rightSiblingNode->m_keyCount;
         m_ptrs[m_keyCount] = rightSiblingNode->m_ptrs[rightSiblingNode->m_keyCount];
 
-        Flush();
         Remove(m_dir, rightSiblingNode->GetIndex());
         m_cache.lock()->erase(rightSiblingNode->GetIndex());
         return { DeleteType::MergedRight, GetMinimum() };
@@ -450,6 +452,9 @@ void Node<V>::Load()
 template<class V>
 void Node<V>::Flush()
 {
+    if (!m_dirty)
+        return;
+
     std::ofstream out;
     out.exceptions(~std::ofstream::goodbit);
     out.open(m_dir / ("batch_" + std::to_string(m_index) + ".dat"), std::ios::out | std::ios::binary | std::ios::trunc);

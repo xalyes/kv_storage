@@ -66,6 +66,7 @@ public:
         : m_dir(dir)
         , m_cache(cache)
         , m_index(idx)
+        , m_dirty(true)
     {
         m_keys.fill(0);
     }
@@ -76,6 +77,7 @@ public:
         , m_index(idx)
         , m_keyCount(newKeyCount)
         , m_keys(newKeys)
+        , m_dirty(false)
     {}
 
     virtual ~BPNode() = default;
@@ -98,6 +100,7 @@ protected:
     FileIndex m_index{ 0 };
     uint32_t m_keyCount{ 0 };
     std::array<Key, MaxKeys> m_keys;
+    bool m_dirty;
 };
 
 template<class V>
@@ -122,6 +125,7 @@ template<class V>
 void BPNode<V>::SetIndex(FileIndex index)
 {
     m_index = index;
+    m_dirty = true;
 }
 
 } // kv_storage
