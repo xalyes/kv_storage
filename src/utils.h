@@ -7,6 +7,9 @@
 #include <optional>
 #include <filesystem>
 #include <boost/endian/conversion.hpp>
+#include <boost/thread/shared_mutex.hpp>
+#include <boost/thread/mutex.hpp>
+#include <boost/thread/locks.hpp>
 
 namespace fs = std::filesystem;
 
@@ -62,20 +65,34 @@ void RemoveFromArray(std::array<uint64_t, N>& arr, size_t pos)
     }
 }
 
-inline FileIndex FindFreeIndex(const fs::path& dir, FileIndex begin)
+class IndexManager
 {
-    auto index = begin;
-    while (true)
-    {
-        if (!fs::exists(dir / ("batch_" + std::to_string(++index) + ".dat")) && index != 0 && index != 1)
-            return index;
-    }
-}
+public:
+    IndexManager(const fs::path& dir)
+        : m_dir(dir)
+    {}
 
-inline void Remove(const fs::path& dir, FileIndex index)
-{
-    fs::remove(dir / ("batch_" + std::to_string(index) + ".dat"));
-}
+    FileIndex FindFreeIndex(const fs::path& dir)
+    {
+        boost::unique_lock<boost::mutex> lock(m_mutex);
+        while (true)
+        {
+            if (!fs::exists(dir / ("batch_" + std::to_string(++m_currentIndex) + ".dat")) && m_currentIndex != 0 && m_currentIndex != 1)
+                return m_currentIndex;
+        }
+    }
+
+    void Remove(const fs::path& dir, FileIndex index)
+    {
+        boost::unique_lock<boost::mutex> lock(m_mutex);
+        fs::remove(dir / ("batch_" + std::to_string(index) + ".dat"));
+    }
+
+private:
+    const fs::path m_dir;
+    boost::mutex m_mutex;
+    FileIndex m_currentIndex{ 1 };
+};
 
 template <typename T>
 T NativeToLittleEndian(T val)
@@ -138,26 +155,31 @@ public:
 
     size_t size() const
     {
+        boost::shared_lock<boost::shared_mutex> lock(m_mutex);
         return m_map.size();
     }
 
     size_t capacity() const
     {
+        boost::shared_lock<boost::shared_mutex> lock(m_mutex);
         return m_capacity;
     }
 
     bool empty() const
     {
+        boost::shared_lock<boost::shared_mutex> lock(m_mutex);
         return m_map.empty();
     }
 
     bool contains(const key_type &key)
     {
+        boost::shared_lock<boost::shared_mutex> lock(m_mutex);
         return m_map.find(key) != m_map.end();
     }
 
     bool erase(const key_type& key)
     {
+        boost::unique_lock<boost::shared_mutex> lock(m_mutex);
         typename map_type::iterator i = m_map.find(key);
         if (i != m_map.end())
         {
@@ -170,6 +192,7 @@ public:
 
     void insert(const key_type &key, const value_type &value)
     {
+        boost::unique_lock<boost::shared_mutex> lock(m_mutex);
         typename map_type::iterator i = m_map.find(key);
         if (i != m_map.end())
         {
@@ -180,7 +203,7 @@ public:
 
         if(i == m_map.end()){
             // insert item into the cache, but first check if it is full
-            if(size() >= m_capacity){
+            if(m_map.size() >= m_capacity){
                 // cache is full, evict the least recently used item
                 evict();
             }
@@ -193,6 +216,7 @@ public:
 
     std::optional<value_type> get(const key_type &key)
     {
+        boost::unique_lock<boost::shared_mutex> lock(m_mutex);
         // lookup value in the cache
         typename map_type::iterator i = m_map.find(key);
         if(i == m_map.end()){
@@ -225,6 +249,7 @@ public:
 
     void clear()
     {
+        boost::unique_lock<boost::shared_mutex> lock(m_mutex);
         m_map.clear();
         m_list.clear();
     }
@@ -242,6 +267,7 @@ private:
     map_type m_map;
     list_type m_list;
     size_t m_capacity;
+    mutable boost::shared_mutex m_mutex;
 };
 
 } // kv_storage

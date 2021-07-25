@@ -106,7 +106,7 @@ BOOST_AUTO_TEST_CASE(DeleteTest)
         std::random_device rd;
         const uint32_t seed = rd();
         std::cout << "seed: " << seed << std::endl;
-        std::mt19937 rng(seed);
+        std::mt19937 rng(983000393);
 
         std::shuffle(keys.begin(), keys.end(), rng);
 
@@ -115,7 +115,7 @@ BOOST_AUTO_TEST_CASE(DeleteTest)
             //std::cout << "Deleting " << keys[i] << std::endl;
             s.Delete(keys[i]);
 
-            if (i % 50 == 0)
+            if (i % 40 == 0)
             {
                 for (int j = i + 1; j < count; j++)
                 {
@@ -184,12 +184,12 @@ BOOST_AUTO_TEST_CASE(EnumeratorTest)
     BOOST_TEST(enumerator->MoveNext() == false);
 }
 
-BOOST_AUTO_TEST_CASE(MillionTest)
+BOOST_AUTO_TEST_CASE(MillionsTest)
 {
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);
 
-    const auto count = 1000000;
+    const auto count = 5000000;
     std::string value = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     {
@@ -228,7 +228,7 @@ BOOST_AUTO_TEST_CASE(FloatsTest)
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);
 
-    const auto count = 100000;
+    const auto count = 1000000;
 
     auto floatingTest = [&](auto dummy)
     {
@@ -245,7 +245,7 @@ BOOST_AUTO_TEST_CASE(FloatsTest)
                 }
 
                 std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-                std::cout << "Time elapsed for inserting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+                std::cout << "Time elapsed for inserting floats: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
             }
         }
 
@@ -261,7 +261,7 @@ BOOST_AUTO_TEST_CASE(FloatsTest)
             }
 
             std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-            std::cout << "Time elapsed for getting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+            std::cout << "Time elapsed for getting floats: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
         }
     };
 
@@ -311,5 +311,121 @@ BOOST_AUTO_TEST_CASE(ManyVolumesTest)
         auto found = storageRoot.Get(i);
         BOOST_TEST(found.size() == 1);
         BOOST_TEST(found[0] == "value" + std::to_string(i));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(MultithreadingTest)
+{
+    fs::path volumeDir("vol");
+    fs::remove_all(volumeDir);
+
+    const auto count = 5000000;
+    std::string value = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    {
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+        {
+            auto s = kv_storage::Volume<std::string>(volumeDir);
+
+            std::thread t1{ [&]()
+            {
+                for (int i = 0; i < count / 4; i++)
+                {
+                    s.Put(i, value);
+                }
+            } };
+
+
+            std::thread t2{ [&]()
+            {
+                for (int i = count / 4; i < count / 2; i++)
+                {
+                    s.Put(i, value);
+                }
+            } };
+
+            std::thread t3{ [&]()
+            {
+                for (int i = count / 2; i < (count / 4) * 3; i++)
+                {
+                    s.Put(i, value);
+                }
+            } };
+
+            std::thread t4{ [&]()
+            {
+                for (int i = (count / 4) * 3; i < count; i++)
+                {
+                    s.Put(i, value);
+                }
+            } };
+
+            t1.join();
+            t2.join();
+            t3.join();
+            t4.join();
+        }
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        std::cout << "Time elapsed for inserting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+    }
+
+    {
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+        auto s = kv_storage::Volume<std::string>(volumeDir);
+
+        std::thread t1{ [&]()
+        {
+            for (int i = 0; i < count / 2; i++)
+            {
+                auto res = s.Get(i);
+                if (!res)
+                    throw std::runtime_error("Failed to find value: " + std::to_string(i));
+            }
+        } };
+
+        std::thread t2{ [&]()
+        {
+            for (int i = count / 2; i < count; i++)
+            {
+                auto res = s.Get(i);
+                if (!res)
+                    throw std::runtime_error("Failed to find value: " + std::to_string(i));
+            }
+        } };
+
+        t1.join();
+        t2.join();
+
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        std::cout << "Time elapsed for getting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+    }
+
+    {
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+        auto s = kv_storage::Volume<std::string>(volumeDir);
+
+        std::thread t1{ [&]()
+        {
+            for (int i = 0; i < count / 2; i++)
+            {
+                s.Delete(i);
+            }
+        } };
+
+        std::thread t2{ [&]()
+        {
+            for (int i = count / 2; i < count; i++)
+            {
+                s.Delete(i);
+            }
+        } };
+
+        t2.join();
+        t1.join();
+
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        std::cout << "Time elapsed for deleting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
     }
 }

@@ -9,8 +9,6 @@
 
 namespace kv_storage {
 
-using Offset = uint64_t;
-
 template <class V>
 class Leaf
     : public BPNode<V>
@@ -34,14 +32,15 @@ public:
 
     virtual void Flush() override;
     virtual void Load() override;
-    virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& val, FileIndex& nodesCount) override;
+    virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& val, IndexManager& indexManager);
     virtual std::optional<V> Get(Key key) const override;
-    virtual DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) override;
+    virtual DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, IndexManager& indexManager);
     virtual Key GetMinimum() const override;
     virtual std::shared_ptr<BPNode<V>> GetFirstLeaf() override;
+    virtual bool IsLeaf() const override;
 
 private:
-    CreatedBPNode<V> SplitAndPut(Key key, const V& value, FileIndex& nodesCount);
+    CreatedBPNode<V> SplitAndPut(Key key, const V& value, IndexManager& indexManager);
     void LeftJoin(const Leaf<V>& leaf);
     void RightJoin(const Leaf<V>& leaf);
     void Insert(Key key, const V& value, uint32_t pos);
@@ -124,6 +123,12 @@ Leaf<V>::~Leaf()
 }
 
 template <class V>
+bool Leaf<V>::IsLeaf() const
+{
+    return true;
+}
+
+template <class V>
 std::shared_ptr<BPNode<V>> Leaf<V>::GetFirstLeaf()
 {
     return shared_from_this();
@@ -139,17 +144,16 @@ void Leaf<V>::Insert(Key key, const V& value, uint32_t pos)
 }
 
 template<class V>
-std::optional<CreatedBPNode<V>> Leaf<V>::Put(Key key, const V& val, FileIndex& nodesCount)
+std::optional<CreatedBPNode<V>> Leaf<V>::Put(Key key, const V& val, IndexManager& indexManager)
 {
     if (m_keyCount == MaxKeys)
     {
         if (m_index == 1)
         {
-            nodesCount = FindFreeIndex(m_dir, nodesCount);
-            m_index = nodesCount;
+            m_index = indexManager.FindFreeIndex(m_dir);
         }
 
-        return SplitAndPut(key, val, nodesCount);
+        return SplitAndPut(key, val, indexManager);
     }
 
     if (m_keyCount == 0)
@@ -189,7 +193,7 @@ std::optional<CreatedBPNode<V>> Leaf<V>::Put(Key key, const V& val, FileIndex& n
 }
 
 template<class V>
-CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, FileIndex& nodesCount)
+CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, IndexManager& indexManager)
 {
     uint32_t copyCount = MaxKeys / 2;
 
@@ -215,21 +219,21 @@ CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, FileIndex& nodesC
 
     Key firstNewKey = newKeys[0];
 
-    nodesCount = FindFreeIndex(m_dir, nodesCount);
+    auto nodesCount = indexManager.FindFreeIndex(m_dir);
     auto newLeaf = std::make_shared<Leaf>(m_dir, m_cache, nodesCount, copyCount, std::move(newKeys), std::move(newValues), m_nextBatch);
-    m_cache.lock()->insert(nodesCount, newLeaf);
 
     m_nextBatch = newLeaf->m_index;
 
     if (key < firstNewKey)
     {
-        Put(key, value, nodesCount);
+        Put(key, value, indexManager);
     }
     else
     {
-        newLeaf->Put(key, value, nodesCount);
+        newLeaf->Put(key, value, indexManager);
     }
 
+    m_cache.lock()->insert(nodesCount, newLeaf);
     return { std::move(newLeaf), firstNewKey };
 }
 
@@ -279,7 +283,7 @@ template<class V>
 std::shared_ptr<BPNode<V>> CreateBPNode(const fs::path& dir, BPCache<V>& cache, FileIndex idx);
 
 template<class V>
-DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling)
+DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, IndexManager& indexManager)
 {
     for (size_t i = 0; i < m_keyCount; i++)
     {
@@ -311,7 +315,7 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
                     auto key = leftSiblingLeaf->GetLastKey();
                     auto value = leftSiblingLeaf->m_values[leftSiblingLeaf->m_keyCount - 1];
                     Insert(key, value, 0);
-                    leftSiblingLeaf->Delete(key, std::nullopt, std::nullopt);
+                    leftSiblingLeaf->Delete(key, std::nullopt, std::nullopt, indexManager);
                     return { DeleteType::BorrowedLeft, m_keys[0] };
                 }
             }
@@ -326,7 +330,7 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
                     auto key = rightSiblingLeaf->m_keys[0];
                     auto value = rightSiblingLeaf->m_values[0];
                     Insert(key, value, m_keyCount);
-                    rightSiblingLeaf->Delete(key, std::nullopt, std::nullopt);
+                    rightSiblingLeaf->Delete(key, std::nullopt, std::nullopt, indexManager);
                     return { DeleteType::BorrowedRight, rightSiblingLeaf->m_keys[0] };
                 }
             }
@@ -336,16 +340,17 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
             {
                 const auto currentIndex = m_index;
                 LeftJoin(*leftSiblingLeaf);
-                Remove(m_dir, currentIndex);
                 m_cache.lock()->erase(currentIndex);
+                indexManager.Remove(m_dir, currentIndex);
 
                 return { DeleteType::MergedLeft, m_keys[0] };
             }
             else if (rightSibling)
             {
                 RightJoin(*rightSiblingLeaf);
-                Remove(m_dir, rightSiblingLeaf->GetIndex());
                 m_cache.lock()->erase(rightSiblingLeaf->GetIndex());
+                indexManager.Remove(m_dir, rightSiblingLeaf->GetIndex());
+                rightSiblingLeaf->MarkAsDeleted();
 
                 return { DeleteType::MergedRight, m_keys[0] };
             }
@@ -368,6 +373,8 @@ Key Leaf<V>::GetMinimum() const
 template<class V>
 void Leaf<V>::Flush()
 {
+    boost::unique_lock<boost::shared_mutex> lock(m_mutex);
+
     if (!m_dirty)
         return;
 
@@ -395,6 +402,8 @@ void Leaf<V>::Flush()
 template<class V>
 void Leaf<V>::Load()
 {
+    boost::unique_lock<boost::shared_mutex> lock(m_mutex);
+
     std::ifstream in;
     in.exceptions(~std::ofstream::goodbit);
     in.open(m_dir / ("batch_" + std::to_string(m_index) + ".dat"), std::ios::in | std::ios::binary);
@@ -416,6 +425,7 @@ void Leaf<V>::Load()
 
     in.read(reinterpret_cast<char*>(&(m_nextBatch)), sizeof(m_nextBatch));
     boost::endian::little_to_native_inplace(m_nextBatch);
+    m_dirty = false;
 }
 
 } // kv_storage

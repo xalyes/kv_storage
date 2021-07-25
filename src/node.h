@@ -10,7 +10,7 @@ namespace fs = std::filesystem;
 namespace kv_storage {
 
 template<class V>
-class Node : public BPNode<V>
+class Node : public BPNode<V>, public std::enable_shared_from_this<BPNode<V>>
 {
 public:
     Node(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
@@ -28,11 +28,15 @@ public:
 
     virtual void Load() override;
     virtual void Flush() override;
-    virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& value, FileIndex& nodesCount) override;
     virtual std::optional<V> Get(Key key) const override;
-    virtual DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) override;
     virtual Key GetMinimum() const override;
     virtual std::shared_ptr<BPNode<V>> GetFirstLeaf() override;
+    virtual bool IsLeaf() const override;
+
+    std::optional<CreatedBPNode<V>> Put(Key key, const CreatedBPNode<V>& newNode, IndexManager& indexManager);
+    DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, const DeleteResult<V>& deleteResult, uint32_t childPos, std::shared_ptr<BPNode<V>> foundChild, IndexManager& indexManager);
+    std::shared_ptr<BPNode<V>> GetChildByKey(Key key) const;
+    std::shared_ptr<BPNode<V>> GetChildByKey(Key key, std::optional<Sibling>& leftSibling, std::optional<Sibling>& rightSibling, uint32_t& childPos) const;
 
 private:
     uint32_t FindKeyPosition(Key key) const;
@@ -47,17 +51,44 @@ Node<V>::~Node()
 }
 
 template <class V>
-std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex& nodesCount)
+bool Node<V>::IsLeaf() const
 {
-    auto foundChild = CreateBPNode<V>(m_dir, m_cache, m_ptrs[FindKeyPosition(key)]);
+    return false;
+}
 
-    auto newNode = foundChild->Put(key, value, nodesCount);
-    if (!newNode)
+template <class V>
+std::shared_ptr<BPNode<V>> Node<V>::GetChildByKey(Key key, std::optional<Sibling>& leftSibling, std::optional<Sibling>& rightSibling, uint32_t& childPos) const
+{
+    childPos = FindKeyPosition(key);
+
     {
-        return std::nullopt;
+        if (childPos == 0)
+        {
+            rightSibling = { m_keys[childPos], m_ptrs[childPos + 1] };
+        }
+        else if (childPos == m_keyCount)
+        {
+            leftSibling = { m_keys[childPos - 1], m_ptrs[childPos - 1] };
+        }
+        else
+        {
+            leftSibling = { m_keys[childPos - 1], m_ptrs[childPos - 1] };
+            rightSibling = { m_keys[childPos], m_ptrs[childPos + 1] };
+        }
     }
 
-    // Child splitted
+    return CreateBPNode<V>(m_dir, m_cache, m_ptrs[childPos]);
+}
+
+template <class V>
+std::shared_ptr<BPNode<V>> Node<V>::GetChildByKey(Key key) const
+{
+    return CreateBPNode<V>(m_dir, m_cache, m_ptrs[FindKeyPosition(key)]);
+}
+
+template <class V>
+std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const CreatedBPNode<V>& newNode, IndexManager& indexManager)
+{
     if (m_keyCount == MaxKeys)
     {
         // Must split this node
@@ -102,7 +133,7 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex&
             count++;
         };
 
-        Key firstNewKey = newNode.value().key;
+        Key firstNewKey = newNode.key;
         if (key < newKeys[0])
         {
             bool found = false;
@@ -115,7 +146,7 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex&
                     continue;
 
                 InsertToArray(m_keys, i, firstNewKey);
-                InsertToArray(m_ptrs, i + 1, newNode.value().node->GetIndex());
+                InsertToArray(m_ptrs, i + 1, newNode.node->GetIndex());
                 m_keyCount++;
                 found = true;
                 break;
@@ -124,28 +155,27 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex&
             if (!found)
             {
                 InsertToArray(m_keys, m_keyCount, firstNewKey);
-                InsertToArray(m_ptrs, m_keyCount + 1, newNode.value().node->GetIndex());
+                InsertToArray(m_ptrs, m_keyCount + 1, newNode.node->GetIndex());
                 m_keyCount++;
             }
         }
         else
         {
             // insert to new node
-            insert(copyCount, newKeys, newPtrs, firstNewKey, newNode.value().node->GetIndex());
+            insert(copyCount, newKeys, newPtrs, firstNewKey, newNode.node->GetIndex());
         }
 
         auto keyToDelete = newKeys[0];
         RemoveFromArray(newKeys, 0);
         copyCount--;
 
-        nodesCount = FindFreeIndex(m_dir, nodesCount);
+        auto nodesCount = indexManager.FindFreeIndex(m_dir);
         auto newNode = std::make_shared<Node>(m_dir, m_cache, nodesCount, copyCount, std::move(newKeys), std::move(newPtrs));
         m_cache.lock()->insert(nodesCount, newNode);
 
         if (m_index == 1)
         {
-            nodesCount = FindFreeIndex(m_dir, nodesCount);
-            m_index = nodesCount;
+            m_index = indexManager.FindFreeIndex(m_dir);
         }
 
         return std::optional<CreatedBPNode<V>>({ std::move(newNode), keyToDelete });
@@ -153,14 +183,14 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex&
     else
     {
         m_dirty = true;
-        Key keyForInsert = newNode.value().key;
+        Key keyForInsert = newNode.key;
 
         for (uint32_t i = 0; i < m_keyCount; i++)
         {
             if (keyForInsert < m_keys[i])
             {
                 InsertToArray(m_keys, i, keyForInsert);
-                InsertToArray(m_ptrs, i + 1, newNode.value().node->GetIndex());
+                InsertToArray(m_ptrs, i + 1, newNode.node->GetIndex());
                 m_keyCount++;
 
                 return std::nullopt;
@@ -168,7 +198,7 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex&
         }
 
         InsertToArray(m_keys, m_keyCount, keyForInsert);
-        InsertToArray(m_ptrs, m_keyCount + 1, newNode.value().node->GetIndex());
+        InsertToArray(m_ptrs, m_keyCount + 1, newNode.node->GetIndex());
         m_keyCount++;
 
         return std::nullopt;
@@ -178,7 +208,6 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const V& value, FileIndex&
 template<class V>
 uint32_t Node<V>::FindKeyPosition(Key key) const
 {
-    // TODO: binary search may be?
     for (uint32_t i = 0; i < m_keyCount; i++)
     {
         if (key < m_keys[i])
@@ -193,82 +222,74 @@ uint32_t Node<V>::FindKeyPosition(Key key) const
 template<class V>
 std::optional<V> Node<V>::Get(Key key) const
 {
-    auto foundChild = CreateBPNode<V>(m_dir, m_cache, m_ptrs[FindKeyPosition(key)]);
-    return foundChild->Get(key);
-}
+    std::shared_ptr<const BPNode<V>> current = shared_from_this();
+    auto firstLock = std::make_unique<boost::shared_lock<boost::shared_mutex>>(current->m_mutex);
+    std::unique_ptr<boost::shared_lock<boost::shared_mutex>> secondLock;
 
-template<class V>
-DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling)
-{
-    // 1. Find and load child node/leaf where key could be stored.
-    std::shared_ptr<BPNode> foundChild;
-    uint32_t childPos;
+    while (true)
     {
-        childPos = FindKeyPosition(key);
-        foundChild = CreateBPNode<V>(m_dir, m_cache, m_ptrs[childPos]);
-    }
+        if (!current->IsLeaf())
+        {
+            auto currentNode = std::static_pointer_cast<const Node<V>>(current);
 
-    // 2. Save information about siblings of found child.
-    std::optional<Sibling> childRightSibling;
-    std::optional<Sibling> childLeftSibling;
-    {
-        if (childPos == 0)
-        {
-            childRightSibling = { m_keys[childPos], m_ptrs[childPos + 1] };
-        }
-        else if (childPos == m_keyCount)
-        {
-            childLeftSibling = { m_keys[childPos - 1], m_ptrs[childPos - 1] };
+            auto child = currentNode->GetChildByKey(key);
+
+            secondLock = std::make_unique<boost::shared_lock<boost::shared_mutex>>(child->m_mutex);
+            firstLock = std::move(secondLock);
+
+            current = child;
         }
         else
         {
-            childLeftSibling = { m_keys[childPos - 1], m_ptrs[childPos - 1] };
-            childRightSibling = { m_keys[childPos], m_ptrs[childPos + 1] };
+            break;
         }
     }
 
-    // 3. Recursive call child's delete method
-    DeleteResult result = foundChild->Delete(key, childLeftSibling, childRightSibling);
+    return current->Get(key);
+}
 
-    if (result.type == DeleteType::Deleted)
+template<class V>
+DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, const DeleteResult<V>& deleteResult, uint32_t childPos, std::shared_ptr<BPNode<V>> foundChild, IndexManager& indexManager)
+{
+    if (deleteResult.type == DeleteType::Deleted)
     {
-        // 4.1 Key deleted.
+        // Key deleted.
         // Almost nothing to do. Updating key if need and returning.
         if (childPos && key == m_keys[childPos - 1])
         {
             m_dirty = true;
             m_keys[childPos - 1] = foundChild->GetMinimum();
         }
-        return result;
+        return deleteResult;
     }
-    else if (result.type == DeleteType::BorrowedLeft)
+    else if (deleteResult.type == DeleteType::BorrowedLeft)
     {
-        // 4.2 Key deleted and one key has been borrowed from left sibling.
+        // Key deleted and one key has been borrowed from left sibling.
         // Almost nothing to do. Updating key and returning.
         if (childPos)
-            m_keys[childPos - 1] = *result.key;
+            m_keys[childPos - 1] = *deleteResult.key;
         else
             throw std::runtime_error("Bad tree status - leftmost child returned BorrowedLeft, but it is impossible.");
 
         m_dirty = true;
         return { DeleteType::Deleted };
     }
-    else if (result.type == DeleteType::BorrowedRight)
+    else if (deleteResult.type == DeleteType::BorrowedRight)
     {
-        // 4.3 Key deleted and one key has been borrowed from right sibling.
+        // Key deleted and one key has been borrowed from right sibling.
         // Almost nothing to do. Updating key and returning.
-        m_keys[childPos] = *result.key;
+        m_keys[childPos] = *deleteResult.key;
         m_dirty = true;
         return { DeleteType::Deleted };
     }
-    else if (result.type == DeleteType::MergedRight)
+    else if (deleteResult.type == DeleteType::MergedRight)
     {
-        // 4.4 Key deleted but right sibling node has been merged with the child node.
+        // Key deleted but right sibling node has been merged with the child node.
         // Removing merged sibling.
         m_dirty = true;
         if (childPos > 1)
         {
-            m_keys[childPos - 1] = *result.key;
+            m_keys[childPos - 1] = *deleteResult.key;
         }
 
         RemoveFromArray(m_keys, childPos);
@@ -276,7 +297,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
     }
     else // MergedLeft
     {
-        // 4.4 Key deleted but left sibling node has been merged with the child node.
+        // Key deleted but left sibling node has been merged with the child node.
         // Original child index has been changed. Removing merged sibling.
 
         m_dirty = true;
@@ -284,7 +305,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
 
         if (childPos > 2)
         {
-            m_keys[childPos - 2] = *result.key;
+            m_keys[childPos - 2] = *deleteResult.key;
         }
 
         RemoveFromArray(m_keys, childPos - 1);
@@ -293,17 +314,17 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
     m_keyCount--;
     m_dirty = true;
 
-    // 5. Special handling for situation when this node is root and child node has been merged with sibling.
+    // Special handling for situation when this node is root and child node has been merged with sibling.
     // Tree shrinked and child node becomes new root.
     if (m_index == 1 && m_keyCount == 0)
     {
-        Remove(m_dir, foundChild->GetIndex());
+        indexManager.Remove(m_dir, foundChild->GetIndex());
         m_cache.lock()->erase(foundChild->GetIndex());
         foundChild->SetIndex(1);
-        return { result.type, std::nullopt, std::move(foundChild) };
+        return { deleteResult.type, std::nullopt, std::move(foundChild) };
     }
 
-    // 6. Simple return if this node has enough keys or if it is root.
+    // Simple return if this node has enough keys or if it is root.
     if (m_keyCount >= MinKeys || m_index == 1)
     {
         return { DeleteType::Deleted, std::nullopt, nullptr };
@@ -311,7 +332,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
 
     std::shared_ptr<Node> leftSiblingNode;
 
-    // 7. Try to borrow left sibling's key...
+    // Try to borrow left sibling's key...
     if (leftSibling)
     {
         leftSiblingNode = std::static_pointer_cast<Node>(CreateBPNode<V>(m_dir, m_cache, leftSibling->index));
@@ -334,7 +355,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
 
     std::shared_ptr<Node> rightSiblingNode;
 
-    // 8. Try to borrow right sibling's key...
+    // Try to borrow right sibling's key...
     if (rightSibling)
     {
         rightSiblingNode = std::static_pointer_cast<Node>(CreateBPNode<V>(m_dir, m_cache, rightSibling->index));
@@ -355,13 +376,13 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         }
     }
 
-    // 9. Merging nodes...
+    // Merging nodes...
     if (leftSiblingNode)
     {
         if (leftSibling->key != key)
             InsertToSortedArray(m_keys, m_keyCount, leftSibling->key);
         else
-            InsertToSortedArray(m_keys, m_keyCount, *result.key);
+            InsertToSortedArray(m_keys, m_keyCount, *deleteResult.key);
         m_keyCount++;
 
         std::array<Key, MaxKeys> newKeys = leftSiblingNode->m_keys;
@@ -380,8 +401,8 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         const auto currentIndex = m_index;
         m_index = leftSiblingNode->GetIndex();
 
-        Remove(m_dir, currentIndex);
         m_cache.lock()->erase(currentIndex);
+        indexManager.Remove(m_dir, currentIndex);
 
         return { DeleteType::MergedLeft, GetMinimum() };
     }
@@ -390,7 +411,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         if (rightSibling->key != key)
             InsertToSortedArray(m_keys, m_keyCount, rightSibling->key);
         else
-            InsertToSortedArray(m_keys, m_keyCount, *result.key);
+            InsertToSortedArray(m_keys, m_keyCount, *deleteResult.key);
         m_keyCount++;
 
         for (uint32_t i = m_keyCount; i <= m_keyCount + rightSiblingNode->m_keyCount - 1; i++)
@@ -401,8 +422,9 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
         m_keyCount += rightSiblingNode->m_keyCount;
         m_ptrs[m_keyCount] = rightSiblingNode->m_ptrs[rightSiblingNode->m_keyCount];
 
-        Remove(m_dir, rightSiblingNode->GetIndex());
         m_cache.lock()->erase(rightSiblingNode->GetIndex());
+        indexManager.Remove(m_dir, rightSiblingNode->GetIndex());
+        rightSiblingNode->MarkAsDeleted();
         return { DeleteType::MergedRight, GetMinimum() };
     }
     else
@@ -428,6 +450,8 @@ std::shared_ptr<BPNode<V>> Node<V>::GetFirstLeaf()
 template<class V>
 void Node<V>::Load()
 {
+    boost::unique_lock<boost::shared_mutex> lock(m_mutex);
+
     std::ifstream in;
     in.exceptions(~std::ofstream::goodbit);
     in.open(m_dir / ("batch_" + std::to_string(m_index) + ".dat"), std::ios::in | std::ios::binary);
@@ -447,11 +471,14 @@ void Node<V>::Load()
         boost::endian::little_to_native_inplace(m_ptrs[i]);
     }
     boost::endian::little_to_native_inplace(m_ptrs[m_ptrs.size() - 1]);
+    m_dirty = false;
 }
 
 template<class V>
 void Node<V>::Flush()
 {
+    boost::unique_lock<boost::shared_mutex> lock(m_mutex);
+
     if (!m_dirty)
         return;
 

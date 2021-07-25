@@ -4,6 +4,7 @@
 #include <string>
 #include <memory>
 #include <filesystem>
+#include <stack>
 
 #include "../src/node.h"
 
@@ -87,6 +88,9 @@ class Volume
 public:
     Volume(const fs::path& directory);
 
+    Volume(Volume&&) noexcept;
+    Volume& operator= (Volume&&) noexcept;
+
     virtual void Put(const Key& key, const V& value);
     virtual std::optional<V> Get(const Key& key) const;
     virtual void Delete(const Key& key);
@@ -99,7 +103,28 @@ private:
     const fs::path m_dir;
     FileIndex m_nodesCount;
     mutable std::shared_ptr<BPCache<V>> m_cache;
+    IndexManager m_indexManager;
+    mutable boost::shared_mutex m_mutex;
 };
+
+template<class V>
+Volume<V>::Volume(Volume<V>&& other) noexcept
+    : m_root(std::move(other.m_root))
+    , m_dir(std::move(other.m_dir))
+    , m_nodesCount(std::move(other.m_nodesCount))
+    , m_cache(std::move(other.m_cache))
+    , m_indexManager(m_dir)
+{}
+
+template<class V>
+Volume<V>& Volume<V>::operator= (Volume<V>&& other) noexcept
+{
+    m_root = std::move(other.m_root);
+    m_dir = std::move(other.m_dir);
+    m_nodesCount = std::move(other.m_nodesCount);
+    m_cache = std::move(other.m_cache);
+    m_indexManager(m_dir);
+}
 
 template<class V>
 std::pair<Key, V> VolumeEnumerator<V>::GetCurrent()
@@ -119,10 +144,68 @@ std::shared_ptr<BPNode<V>> Volume<V>::GetCustomNode(FileIndex idx) const
 template<class V>
 void Volume<V>::Put(const Key& key, const V& value)
 {
-    auto newNode = m_root->Put(key, value, m_nodesCount);
-    if (!newNode)
-        return;
+    std::vector<boost::upgrade_lock<boost::shared_mutex>> locks;
 
+    locks.emplace_back(m_mutex);
+
+    auto current = m_root;
+
+    std::vector<std::shared_ptr<Node<V>>> nodes;
+
+    locks.emplace_back(current->m_mutex);
+
+    // Searching leaf for insert, lock nodes and save processed nodes
+    while (!current->IsLeaf())
+    {
+        auto currentNode = std::static_pointer_cast<Node<V>>(current);
+        nodes.push_back(currentNode);
+
+        auto child = currentNode->GetChildByKey(key);
+
+        boost::upgrade_lock<boost::shared_mutex> lock(child->m_mutex);
+
+        current = child;
+
+        if (current->GetKeyCount() < MaxKeys)
+        {
+            // Current node is safe - we can release the ancestor nodes
+            locks.clear();
+        }
+
+        locks.push_back(std::move(lock));
+    }
+
+    // Upgrading locks to unique mode
+    std::vector<boost::upgrade_to_unique_lock<boost::shared_mutex>> exclusiveLocks;
+    for (auto& l : locks)
+    {
+        exclusiveLocks.emplace_back(l);
+    }
+
+    // Put to the leaf
+    auto leaf = std::static_pointer_cast<Leaf<V>>(current);
+    std::optional<CreatedBPNode<V>> newNode = leaf->Put(key, value, m_indexManager);
+
+    // If child node has been splitted than we should link a new node to parent. Repeat while nodes is splitting
+    auto nodesIt = nodes.rbegin();
+    while (newNode && nodesIt != nodes.rend())
+    {
+        newNode = (*nodesIt)->Put(key, newNode.value(), m_indexManager);
+        nodesIt++;
+    }
+
+    if (!newNode)
+    {
+        while (!exclusiveLocks.empty())
+        {
+            exclusiveLocks.pop_back();
+        }
+        locks.clear();
+
+        return;
+    }
+
+    // Splitting the root
     std::array<Key, MaxKeys> keys;
     keys.fill(0);
     std::array<FileIndex, B> ptrs;
@@ -136,12 +219,41 @@ void Volume<V>::Put(const Key& key, const V& value)
 
     m_root = std::make_unique<Node<V>>(m_dir, m_cache, 1, 1, std::move(keys), std::move(ptrs));
     m_cache->insert(1, m_root);
+
+    while (!exclusiveLocks.empty())
+    {
+        exclusiveLocks.pop_back();
+    }
+    locks.clear();
 }
 
 template<class V>
 std::optional<V> Volume<V>::Get(const Key& key) const
 {
-    return m_root->Get(key);
+    auto current = m_root;
+    auto firstLock = std::make_unique<boost::shared_lock<boost::shared_mutex>>(current->m_mutex);
+    std::unique_ptr<boost::shared_lock<boost::shared_mutex>> secondLock;
+
+    while (true)
+    {
+        if (!current->IsLeaf())
+        {
+            auto currentNode = std::static_pointer_cast<Node<V>>(current);
+
+            auto child = currentNode->GetChildByKey(key);
+
+            secondLock = std::make_unique<boost::shared_lock<boost::shared_mutex>>(child->m_mutex);
+            firstLock = std::move(secondLock);
+
+            current = child;
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    return current->Get(key);
 }
 
 template<class V>
@@ -181,19 +293,127 @@ bool VolumeEnumerator<V>::MoveNext()
 template<class V>
 void Volume<V>::Delete(const Key& key)
 {
-    auto res = m_root->Delete(key, std::nullopt, std::nullopt);
-    if (res.type == DeleteType::MergedRight || res.type == DeleteType::MergedLeft)
+    std::vector<boost::upgrade_lock<boost::shared_mutex>> locks;
+
+    locks.emplace_back(m_mutex);
+
+    auto current = m_root;
+
+    std::vector<std::tuple<std::shared_ptr<Node<V>>, std::optional<Sibling>, std::optional<Sibling>, uint32_t>> nodes;
+
+    locks.emplace_back(current->m_mutex);
+
+    // Searching the leaf for deleting with locking mutexes and saving some metainformation like siblings and child position.
+    while (!current->IsLeaf())
     {
-        m_root = std::move(res.node);
-        m_cache->insert(1, m_root);
+        auto currentNode = std::static_pointer_cast<Node<V>>(current);
+
+        std::optional<Sibling> left;
+        std::optional<Sibling> right;
+        uint32_t childPos = 0;
+
+        auto child = currentNode->GetChildByKey(key, left, right, childPos);
+
+        nodes.emplace_back(currentNode, left, right, childPos);
+
+        boost::upgrade_lock<boost::shared_mutex> lock(child->m_mutex);
+
+        current = child;
+
+        if (current->GetKeyCount() > MinKeys)
+        {
+            // Current node is safe - we can release the ancestor nodes
+            locks.clear();
+        }
+
+        locks.push_back(std::move(lock));
+    }
+
+    // Upgrading locks to unique mode
+    std::vector<boost::upgrade_to_unique_lock<boost::shared_mutex>> exclusiveLocks;
+    for (auto& l : locks)
+    {
+        exclusiveLocks.emplace_back(l);
+    }
+
+    auto leaf = std::static_pointer_cast<Leaf<V>>(current);
+
+    auto nodesIt = nodes.rbegin();
+
+    std::optional<Sibling> leftSibling;
+    std::optional<Sibling> rightSibling;
+    if (nodesIt != nodes.rend())
+    {
+        leftSibling = std::get<1>(nodes.back());
+        rightSibling = std::get<2>(nodes.back());
+    }
+
+    // Delete from the leaf and save delete result
+    auto deleteResult = leaf->Delete(key, leftSibling, rightSibling, m_indexManager);
+
+    auto counter = exclusiveLocks.size() - 1;
+
+    while (nodesIt != nodes.rend() && counter)
+    {
+        auto node = std::get<0>(*nodesIt);
+        std::shared_ptr<BPNode<V>> child;
+        if (nodesIt == nodes.rbegin())
+        {
+            child = current;
+        }
+        else
+        {
+            child = std::get<0>(*std::prev(nodesIt));
+        }
+        auto childPos = std::get<3>(*nodesIt);
+
+        std::optional<Sibling> left;
+        std::optional<Sibling> right;
+
+        auto siblingsIt = std::next(nodesIt);
+        if (siblingsIt != nodes.rend())
+        {
+            left = std::get<1>(*siblingsIt);
+            right = std::get<2>(*siblingsIt);
+        }
+
+        deleteResult = node->Delete(key, left, right, deleteResult, childPos, child, m_indexManager);
+        nodesIt++;
+        counter--;
+    }
+
+    if (!counter)
+    {
+        while (!exclusiveLocks.empty())
+        {
+            exclusiveLocks.pop_back();
+        }
+        locks.clear();
+
         return;
     }
+
+    // Special case when height of tree is decreasing. We should replace root node.
+    if (deleteResult.type == DeleteType::MergedRight || deleteResult.type == DeleteType::MergedLeft)
+    {
+        m_root = std::move(deleteResult.node);
+        m_cache->insert(1, m_root);
+    }
+
+    while (!exclusiveLocks.empty())
+    {
+        exclusiveLocks.pop_back();
+    }
+    locks.clear();
+
+    return;
 }
 
 template<class V>
 Volume<V>::Volume(const fs::path& directory)
     : m_dir(directory)
-    , m_cache(std::make_shared<BPCache<V>>(5000))
+    , m_cache(std::make_shared<BPCache<V>>(200000))
+    , m_indexManager(m_dir)
 {
     if (!fs::exists(m_dir / "batch_1.dat"))
     {

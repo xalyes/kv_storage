@@ -17,7 +17,7 @@ constexpr uint32_t Half(uint32_t num)
         return (num - 1) / 2;
 }
 
-constexpr size_t B = 200;
+constexpr size_t B = 50;
 constexpr size_t MaxKeys = B - 1;
 constexpr size_t MinKeys = Half(B);
 
@@ -62,6 +62,8 @@ template<class V>
 class BPNode
 {
 public:
+    template<class V> friend class VolumeEnumerator;
+
     BPNode(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
         : m_dir(dir)
         , m_cache(cache)
@@ -77,22 +79,26 @@ public:
         , m_index(idx)
         , m_keyCount(newKeyCount)
         , m_keys(newKeys)
-        , m_dirty(false)
-    {}
+        , m_dirty(true)
+    {
+    }
 
     virtual ~BPNode() = default;
 
     virtual void Load() = 0;
     virtual void Flush() = 0;
-    virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& value, FileIndex& nodesCount) = 0;
     virtual std::optional<V> Get(Key key) const = 0;
-    virtual DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling) = 0;
     virtual std::shared_ptr<BPNode> GetFirstLeaf() = 0;
     virtual Key GetMinimum() const = 0;
+    virtual bool IsLeaf() const = 0;
+
     virtual uint32_t GetKeyCount() const;
     virtual Key GetLastKey() const;
     virtual FileIndex GetIndex() const;
     virtual void SetIndex(FileIndex index);
+    virtual void MarkAsDeleted();
+
+    mutable boost::shared_mutex m_mutex;
 
 protected:
     const fs::path m_dir;
@@ -126,6 +132,12 @@ void BPNode<V>::SetIndex(FileIndex index)
 {
     m_index = index;
     m_dirty = true;
+}
+
+template<class V>
+void BPNode<V>::MarkAsDeleted()
+{
+    m_dirty = false;
 }
 
 } // kv_storage
