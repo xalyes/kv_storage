@@ -429,3 +429,43 @@ BOOST_AUTO_TEST_CASE(MultithreadingTest)
         std::cout << "Time elapsed for deleting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
     }
 }
+
+BOOST_AUTO_TEST_CASE(AutoDeleteTest)
+{
+    fs::path volumeDir("vol");
+    fs::remove_all(volumeDir);
+
+    auto s = kv_storage::Volume<std::string>(volumeDir);
+    s.StartAutoDelete();
+
+    s.Put(1, "val1", 1);
+    s.Put(2, "val2", 1);
+    s.Put(3, "val3", 1);
+    s.Put(4, "val4", 1);
+    s.Put(5, "val5", 1);
+
+    s.Put(6, "val6", 5);
+    s.Put(7, "val7", 5);
+    s.Put(8, "val8", 5);
+    s.Put(9, "val9", 5);
+    s.Put(10, "val10", 5);
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    BOOST_TEST(s.Get(1).has_value() == false);
+    BOOST_TEST(s.Get(2).has_value() == false);
+    BOOST_TEST(s.Get(3).has_value() == false);
+    BOOST_TEST(s.Get(4).has_value() == false);
+    BOOST_TEST(s.Get(5).has_value() == false);
+    BOOST_TEST(s.Get(6).has_value() == true);
+    BOOST_TEST(s.Get(7).has_value() == true);
+    BOOST_TEST(s.Get(8).has_value() == true);
+    BOOST_TEST(s.Get(9).has_value() == true);
+    BOOST_TEST(s.Get(10).has_value() == true);
+
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+    BOOST_TEST(s.Get(6).has_value() == false);
+    BOOST_TEST(s.Get(7).has_value() == false);
+    BOOST_TEST(s.Get(8).has_value() == false);
+    BOOST_TEST(s.Get(9).has_value() == false);
+    BOOST_TEST(s.Get(10).has_value() == false);
+}

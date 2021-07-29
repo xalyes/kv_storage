@@ -4,13 +4,119 @@
 #include <string>
 #include <memory>
 #include <filesystem>
-#include <stack>
+#include <unordered_map>
 
 #include "../src/node.h"
 
 namespace fs = std::filesystem;
 
 namespace kv_storage {
+
+const std::chrono::duration AutoDeletePeriod = std::chrono::seconds(1);
+
+template<class V>
+class Volume;
+
+template<class V>
+class OutdatedKeysDeleter
+{
+public:
+    OutdatedKeysDeleter(Volume<V>* volume);
+    ~OutdatedKeysDeleter();
+    void Start();
+    void Put(Key key, uint32_t ttl);
+    void Delete(Key key);
+
+private:
+    std::unordered_map<Key, uint64_t> m_ttls;
+    std::thread m_worker;
+    std::atomic_bool m_stop{ false };
+    Volume<V>* m_volume;
+};
+
+template<class V>
+OutdatedKeysDeleter<V>::OutdatedKeysDeleter(Volume<V>* volume)
+{
+    m_volume = volume;
+}
+
+template<class V>
+OutdatedKeysDeleter<V>::~OutdatedKeysDeleter()
+{
+    if (m_worker.joinable())
+    {
+        m_stop = true;
+        m_worker.join();
+    }
+}
+
+template<class V>
+void OutdatedKeysDeleter<V>::Start()
+{
+    if (m_worker.joinable())
+        throw std::runtime_error("Worker thread already started");
+
+    m_worker = std::thread{ [&]()
+    {
+        try
+        {
+            while (!m_stop)
+            {
+                const std::chrono::time_point now = std::chrono::system_clock::now();
+                const std::chrono::system_clock::duration nowEpoch = now.time_since_epoch();
+                const uint64_t nowSeconds = nowEpoch.count() * std::chrono::system_clock::period::num / std::chrono::system_clock::period::den;
+
+                std::vector<Key> keysForDelete;
+
+                for (const auto& item : m_ttls)
+                {
+                    if (nowSeconds >= item.second)
+                        keysForDelete.push_back(item.first);
+                }
+
+                for (const auto& key : keysForDelete)
+                {
+                    try
+                    {
+                        m_volume->Delete(key);
+                    }
+                    catch (const std::exception& e)
+                    {
+                        // key not found
+                    }
+                    m_ttls.erase(key);
+                }
+
+                const auto elapsed = std::chrono::system_clock::now() - now;
+                if (elapsed < AutoDeletePeriod)
+                    std::this_thread::sleep_for(AutoDeletePeriod - elapsed);
+            }
+        }
+        catch (const std::exception& e)
+        {
+            // Fatal error
+            return;
+        }
+    } };
+}
+
+template<class V>
+void OutdatedKeysDeleter<V>::Put(Key key, uint32_t ttl)
+{
+    std::chrono::system_clock::time_point tp = std::chrono::system_clock::now();
+    std::chrono::system_clock::duration dur = tp.time_since_epoch();
+
+    uint64_t seconds = dur.count() * std::chrono::system_clock::period::num / std::chrono::system_clock::period::den;
+    seconds += ttl;
+
+    m_ttls.insert({ key, seconds });
+}
+
+template<class V>
+void OutdatedKeysDeleter<V>::Delete(Key key)
+{
+    m_ttls.erase(key);
+}
 
 template<class V>
 class BPNode;
@@ -69,7 +175,7 @@ template <class V>
 class VolumeEnumerator
 {
 public:
-    VolumeEnumerator(const fs::path& directory, std::weak_ptr<BPCache<V>> cache, std::shared_ptr<BPNode<V>> firstBatch);
+    VolumeEnumerator(const fs::path& directory, std::weak_ptr<BPCache<V>> cache, std::shared_ptr<BPNode<V>> firstBatch, boost::shared_lock<boost::shared_mutex>&& lock);
     virtual bool MoveNext();
     virtual std::pair<Key, V> GetCurrent();
     virtual ~VolumeEnumerator() = default;
@@ -79,7 +185,8 @@ private:
     int32_t m_counter{ -1 };
     const fs::path m_dir;
     std::weak_ptr<BPCache<V>> m_cache;
-    bool isValid{ true };
+    bool m_isValid{ true };
+    boost::shared_lock<boost::shared_mutex> m_lock;
 };
 
 template <class V>
@@ -91,14 +198,17 @@ public:
     Volume(Volume&&) noexcept;
     Volume& operator= (Volume&&) noexcept;
 
-    virtual void Put(const Key& key, const V& value);
+    virtual void Put(const Key& key, const V& value, std::optional<uint32_t> keyTtl = std::nullopt);
     virtual std::optional<V> Get(const Key& key) const;
     virtual void Delete(const Key& key);
     virtual std::shared_ptr<BPNode<V>> Volume<V>::GetCustomNode(FileIndex idx) const;
     virtual std::unique_ptr<VolumeEnumerator<V>> Enumerate() const;
     virtual ~Volume() = default;
 
+    void StartAutoDelete();
+
 private:
+    std::unique_ptr<OutdatedKeysDeleter<V>> m_deleter;
     std::shared_ptr<BPNode<V>> m_root;
     const fs::path m_dir;
     FileIndex m_nodesCount;
@@ -109,7 +219,8 @@ private:
 
 template<class V>
 Volume<V>::Volume(Volume<V>&& other) noexcept
-    : m_root(std::move(other.m_root))
+    : m_deleter(std::move(other.m_deleter))
+    , m_root(std::move(other.m_root))
     , m_dir(std::move(other.m_dir))
     , m_nodesCount(std::move(other.m_nodesCount))
     , m_cache(std::move(other.m_cache))
@@ -119,17 +230,25 @@ Volume<V>::Volume(Volume<V>&& other) noexcept
 template<class V>
 Volume<V>& Volume<V>::operator= (Volume<V>&& other) noexcept
 {
+    m_deleter = std::move(m_deleter);
     m_root = std::move(other.m_root);
     m_dir = std::move(other.m_dir);
     m_nodesCount = std::move(other.m_nodesCount);
     m_cache = std::move(other.m_cache);
-    m_indexManager(m_dir);
+    m_indexManager = IndexManager(m_dir);
 }
 
 template<class V>
 std::pair<Key, V> VolumeEnumerator<V>::GetCurrent()
 {
     return { m_currentBatch->m_keys[m_counter], m_currentBatch->m_values[m_counter] };
+}
+
+template<class V>
+void Volume<V>::StartAutoDelete()
+{
+    m_deleter = std::make_unique<OutdatedKeysDeleter<V>>(this);
+    m_deleter->Start();
 }
 
 template<class V>
@@ -142,7 +261,7 @@ std::shared_ptr<BPNode<V>> Volume<V>::GetCustomNode(FileIndex idx) const
 }
 
 template<class V>
-void Volume<V>::Put(const Key& key, const V& value)
+void Volume<V>::Put(const Key& key, const V& value, std::optional<uint32_t> keyTtl /*= std::nullopt*/)
 {
     std::vector<boost::upgrade_lock<boost::shared_mutex>> locks;
 
@@ -202,6 +321,9 @@ void Volume<V>::Put(const Key& key, const V& value)
         }
         locks.clear();
 
+        if (keyTtl && m_deleter)
+            m_deleter->Put(key, keyTtl.value());
+
         return;
     }
 
@@ -225,6 +347,9 @@ void Volume<V>::Put(const Key& key, const V& value)
         exclusiveLocks.pop_back();
     }
     locks.clear();
+
+    if (keyTtl && m_deleter)
+        m_deleter->Put(key, keyTtl.value());
 }
 
 template<class V>
@@ -257,16 +382,18 @@ std::optional<V> Volume<V>::Get(const Key& key) const
 }
 
 template<class V>
-VolumeEnumerator<V>::VolumeEnumerator(const fs::path& directory, std::weak_ptr<BPCache<V>> cache, std::shared_ptr<BPNode<V>> firstBatch)
+VolumeEnumerator<V>::VolumeEnumerator(const fs::path& directory, std::weak_ptr<BPCache<V>> cache, std::shared_ptr<BPNode<V>> firstBatch, boost::shared_lock<boost::shared_mutex>&& lock)
     : m_dir(directory)
     , m_cache(cache)
     , m_currentBatch(std::static_pointer_cast<Leaf<V>>(firstBatch))
-{}
+    , m_lock(std::move(lock))
+{
+}
 
 template<class V>
 bool VolumeEnumerator<V>::MoveNext()
 {
-    if (!isValid)
+    if (!m_isValid)
         return false;
 
     m_counter++;
@@ -274,7 +401,7 @@ bool VolumeEnumerator<V>::MoveNext()
     {
         if (!m_currentBatch->m_nextBatch)
         {
-            isValid = false;
+            m_isValid = false;
             return false;
         }
 
@@ -390,6 +517,9 @@ void Volume<V>::Delete(const Key& key)
         }
         locks.clear();
 
+        if (m_deleter)
+            m_deleter->Delete(key);
+
         return;
     }
 
@@ -405,6 +535,9 @@ void Volume<V>::Delete(const Key& key)
         exclusiveLocks.pop_back();
     }
     locks.clear();
+
+    if (m_deleter)
+        m_deleter->Delete(key);
 
     return;
 }
@@ -431,7 +564,8 @@ Volume<V>::Volume(const fs::path& directory)
 template<class V>
 std::unique_ptr<VolumeEnumerator<V>> Volume<V>::Enumerate() const
 {
-    return std::make_unique<VolumeEnumerator<V>>(m_dir, m_cache, m_root->GetFirstLeaf());
+    boost::shared_lock<boost::shared_mutex> lock(m_mutex);
+    return std::make_unique<VolumeEnumerator<V>>(m_dir, m_cache, m_root->GetFirstLeaf(), std::move(lock));
 }
 
 } // kv_storage

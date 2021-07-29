@@ -17,7 +17,7 @@ constexpr uint32_t Half(uint32_t num)
         return (num - 1) / 2;
 }
 
-constexpr size_t B = 50;
+constexpr size_t B = 150;
 constexpr size_t MaxKeys = B - 1;
 constexpr size_t MinKeys = Half(B);
 
