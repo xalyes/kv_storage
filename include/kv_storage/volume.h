@@ -21,13 +21,16 @@ template<class V>
 class OutdatedKeysDeleter
 {
 public:
-    OutdatedKeysDeleter(Volume<V>* volume);
+    OutdatedKeysDeleter(Volume<V>* volume, const fs::path& directory);
     ~OutdatedKeysDeleter();
     void Start();
     void Put(Key key, uint32_t ttl);
     void Delete(Key key);
+    void Flush();
+    void Load();
 
 private:
+    const fs::path m_dir;
     std::unordered_map<Key, uint64_t> m_ttls;
     std::thread m_worker;
     std::atomic_bool m_stop{ false };
@@ -35,9 +38,13 @@ private:
 };
 
 template<class V>
-OutdatedKeysDeleter<V>::OutdatedKeysDeleter(Volume<V>* volume)
+OutdatedKeysDeleter<V>::OutdatedKeysDeleter(Volume<V>* volume, const fs::path& directory)
+    : m_dir(directory)
 {
     m_volume = volume;
+
+    if (fs::exists(m_dir / "keys_ttls.dat"))
+        Load();
 }
 
 template<class V>
@@ -48,6 +55,8 @@ OutdatedKeysDeleter<V>::~OutdatedKeysDeleter()
         m_stop = true;
         m_worker.join();
     }
+
+    Flush();
 }
 
 template<class V>
@@ -70,6 +79,9 @@ void OutdatedKeysDeleter<V>::Start()
 
                 for (const auto& item : m_ttls)
                 {
+                    if (m_stop)
+                        break;
+
                     if (nowSeconds >= item.second)
                         keysForDelete.push_back(item.first);
                 }
@@ -80,7 +92,7 @@ void OutdatedKeysDeleter<V>::Start()
                     {
                         m_volume->Delete(key);
                     }
-                    catch (const std::exception& e)
+                    catch (const std::exception&)
                     {
                         // key not found
                     }
@@ -92,7 +104,7 @@ void OutdatedKeysDeleter<V>::Start()
                     std::this_thread::sleep_for(AutoDeletePeriod - elapsed);
             }
         }
-        catch (const std::exception& e)
+        catch (const std::exception&)
         {
             // Fatal error
             return;
@@ -116,6 +128,53 @@ template<class V>
 void OutdatedKeysDeleter<V>::Delete(Key key)
 {
     m_ttls.erase(key);
+}
+
+template<class V>
+void OutdatedKeysDeleter<V>::Flush()
+{
+    std::ofstream out;
+    out.exceptions(~std::ofstream::goodbit);
+    out.open(m_dir / "keys_ttls.dat", std::ios::out | std::ios::binary | std::ios::trunc);
+
+    uint32_t count = boost::endian::native_to_little(m_ttls.size());
+    out.write(reinterpret_cast<char*>(&count), sizeof(count));
+
+    for (const auto& ttl : m_ttls)
+    {
+        auto key = boost::endian::native_to_little(ttl.first);
+        out.write(reinterpret_cast<char*>(&key), sizeof(key));
+
+        auto time = boost::endian::native_to_little(ttl.second);
+        out.write(reinterpret_cast<char*>(&time), sizeof(time));
+    }
+}
+
+template<class V>
+void OutdatedKeysDeleter<V>::Load()
+{
+    std::ifstream in;
+    in.exceptions(~std::ofstream::goodbit);
+    in.open(m_dir / "keys_ttls.dat", std::ios::in | std::ios::binary);
+
+    uint32_t count;
+    in.read(reinterpret_cast<char*>(&(count)), sizeof(count));
+
+    boost::endian::little_to_native_inplace(count);
+
+    for (uint32_t i = 0; i < count; i++)
+    {
+        Key key;
+        uint64_t time;
+
+        in.read(reinterpret_cast<char*>(&(key)), sizeof(key));
+        in.read(reinterpret_cast<char*>(&(time)), sizeof(time));
+
+        boost::endian::little_to_native_inplace(key);
+        boost::endian::little_to_native_inplace(time);
+
+        m_ttls.insert({ key, time });
+    }
 }
 
 template<class V>
@@ -247,7 +306,7 @@ std::pair<Key, V> VolumeEnumerator<V>::GetCurrent()
 template<class V>
 void Volume<V>::StartAutoDelete()
 {
-    m_deleter = std::make_unique<OutdatedKeysDeleter<V>>(this);
+    m_deleter = std::make_unique<OutdatedKeysDeleter<V>>(this, m_dir);
     m_deleter->Start();
 }
 

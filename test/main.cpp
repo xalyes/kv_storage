@@ -19,8 +19,10 @@
 
 namespace fs = std::filesystem;
 
-BOOST_AUTO_TEST_CASE(BasicTest)
+BOOST_AUTO_TEST_CASE(BasicTest, * boost::unit_test::disabled())
 {
+    std::cout << "BasicTest" << std::endl;
+
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);
 
@@ -43,6 +45,8 @@ BOOST_AUTO_TEST_CASE(BasicTest)
 
 BOOST_AUTO_TEST_CASE(FewBatchesTest)
 {
+    std::cout << "FewBatchesTest" << std::endl;
+
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);
 
@@ -87,6 +91,8 @@ BOOST_AUTO_TEST_CASE(FewBatchesTest)
 
 BOOST_AUTO_TEST_CASE(DeleteTest)
 {
+    std::cout << "DeleteTest" << std::endl;
+
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);
 
@@ -128,6 +134,8 @@ BOOST_AUTO_TEST_CASE(DeleteTest)
 
 BOOST_AUTO_TEST_CASE(EnumeratorTest)
 {
+    std::cout << "EnumeratorTest" << std::endl;
+
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);
 
@@ -186,6 +194,8 @@ BOOST_AUTO_TEST_CASE(EnumeratorTest)
 
 BOOST_AUTO_TEST_CASE(MillionsTest)
 {
+    std::cout << "MillionsTest" << std::endl;
+
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);
 
@@ -225,6 +235,8 @@ BOOST_AUTO_TEST_CASE(MillionsTest)
 
 BOOST_AUTO_TEST_CASE(FloatsTest)
 {
+    std::cout << "FloatsTest" << std::endl;
+
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);
 
@@ -274,6 +286,8 @@ BOOST_AUTO_TEST_CASE(FloatsTest)
 
 BOOST_AUTO_TEST_CASE(ManyVolumesTest)
 {
+    std::cout << "ManyVolumesTest" << std::endl;
+
     std::vector<kv_storage::Volume<std::string>> volumes;
 
     for (int i = 0; i < 11; i++)
@@ -316,6 +330,8 @@ BOOST_AUTO_TEST_CASE(ManyVolumesTest)
 
 BOOST_AUTO_TEST_CASE(MultithreadingTest)
 {
+    std::cout << "MultithreadingTest" << std::endl;
+
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);
 
@@ -432,23 +448,30 @@ BOOST_AUTO_TEST_CASE(MultithreadingTest)
 
 BOOST_AUTO_TEST_CASE(AutoDeleteTest)
 {
+    std::cout << "AutoDeleteTest" << std::endl;
+
     fs::path volumeDir("vol");
     fs::remove_all(volumeDir);
 
+    {
+        auto s = kv_storage::Volume<std::string>(volumeDir);
+        s.StartAutoDelete();
+
+        s.Put(1, "val1", 1);
+        s.Put(2, "val2", 1);
+        s.Put(3, "val3", 1);
+        s.Put(4, "val4", 1);
+        s.Put(5, "val5", 1);
+
+        s.Put(6, "val6", 5);
+        s.Put(7, "val7", 5);
+        s.Put(8, "val8", 5);
+        s.Put(9, "val9", 5);
+        s.Put(10, "val10", 5);
+    }
+
     auto s = kv_storage::Volume<std::string>(volumeDir);
     s.StartAutoDelete();
-
-    s.Put(1, "val1", 1);
-    s.Put(2, "val2", 1);
-    s.Put(3, "val3", 1);
-    s.Put(4, "val4", 1);
-    s.Put(5, "val5", 1);
-
-    s.Put(6, "val6", 5);
-    s.Put(7, "val7", 5);
-    s.Put(8, "val8", 5);
-    s.Put(9, "val9", 5);
-    s.Put(10, "val10", 5);
 
     std::this_thread::sleep_for(std::chrono::seconds(2));
     BOOST_TEST(s.Get(1).has_value() == false);
