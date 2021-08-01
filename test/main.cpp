@@ -19,7 +19,7 @@
 
 namespace fs = std::filesystem;
 
-BOOST_AUTO_TEST_CASE(BasicTest, * boost::unit_test::disabled())
+BOOST_AUTO_TEST_CASE(BasicTest)
 {
     std::cout << "BasicTest" << std::endl;
 
@@ -491,4 +491,53 @@ BOOST_AUTO_TEST_CASE(AutoDeleteTest)
     BOOST_TEST(s.Get(8).has_value() == false);
     BOOST_TEST(s.Get(9).has_value() == false);
     BOOST_TEST(s.Get(10).has_value() == false);
+}
+
+// Test for putting 200 millions keys with small string values.
+// My run (HDD, 150 branch factor, 200 000 cache size, x64 build on windows 10) gives follows:
+// - 2 702 221 files in volume
+// - 8.10 GB size (10.3 GB on disk)
+// - 2957 seconds elapsed for inserting overall (67k/sec)
+// - 1549 seconds elapsed for getting values (129k/sec)
+// - ~2.2 GB RAM usage
+
+BOOST_AUTO_TEST_CASE(LoadTest, * boost::unit_test::disabled())
+{
+    std::cout << "Load test" << std::endl;
+
+    fs::path volumeDir("D:\\volume");
+    fs::remove_all(volumeDir);
+
+    const auto count = 200000000;
+    std::string value = "aaaaaaaaaaaaaaaaaaaaaaa";
+
+    {
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+        {
+            auto s = kv_storage::Volume<std::string>(volumeDir);
+
+            for (int i = 0; i < count; i++)
+            {
+                s.Put(i, value);
+            }
+        }
+
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        std::cout << "Time elapsed for inserting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+    }
+ 
+    {
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+        auto s = kv_storage::Volume<std::string>(volumeDir);
+
+        for (int i = 0; i < count; i++)
+        {
+            BOOST_TEST(s.Get(i).has_value() == true);
+        }
+
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        std::cout << "Time elapsed for getting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+    }
 }
