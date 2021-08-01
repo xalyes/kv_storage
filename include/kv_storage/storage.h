@@ -7,38 +7,38 @@
 
 namespace kv_storage {
 
-template<class V>
+template<class V, size_t BranchFactor = 150>
 class StorageNode
 {
 public:
     StorageNode() {}
     void Mount(const Volume<V>& vol, size_t priority = 0, FileIndex idx = 1);
     std::vector<V> Get(const Key& key) const;
-    std::vector<std::shared_ptr<StorageNode<V>>> GetChilds() const;
-    std::shared_ptr<StorageNode<V>> CreateChildNode();
+    std::vector<std::shared_ptr<StorageNode<V, BranchFactor>>> GetChilds() const;
+    std::shared_ptr<StorageNode<V, BranchFactor>> CreateChildNode();
     void EraseNode(size_t idx);
 
 private:
-    std::multimap<size_t, std::shared_ptr<BPNode<V>>> m_volumeNodes;
-    std::vector<std::shared_ptr<StorageNode<V>>> m_childs;
+    std::multimap<size_t, std::shared_ptr<BPNode<V, BranchFactor>>> m_volumeNodes;
+    std::vector<std::shared_ptr<StorageNode<V, BranchFactor>>> m_childs;
 };
 
-template<class V>
-std::vector<std::shared_ptr<StorageNode<V>>> StorageNode<V>::GetChilds() const
+template<class V, size_t BranchFactor>
+std::vector<std::shared_ptr<StorageNode<V, BranchFactor>>> StorageNode<V, BranchFactor>::GetChilds() const
 {
     return m_childs;
 }
 
-template<class V>
-std::shared_ptr<StorageNode<V>> StorageNode<V>::CreateChildNode()
+template<class V, size_t BranchFactor>
+std::shared_ptr<StorageNode<V, BranchFactor>> StorageNode<V, BranchFactor>::CreateChildNode()
 {
-    auto newChild = std::make_shared<StorageNode<V>>(StorageNode<V>());
+    auto newChild = std::make_shared<StorageNode<V, BranchFactor>>(StorageNode<V>());
     m_childs.emplace_back(std::move(newChild));
     return m_childs.back();
 }
 
-template<class V>
-void StorageNode<V>::EraseNode(size_t idx)
+template<class V, size_t BranchFactor>
+void StorageNode<V, BranchFactor>::EraseNode(size_t idx)
 {
     if (m_childs.size() < idx)
         throw std::runtime_error("Failed to delete node - index out of range");
@@ -46,14 +46,14 @@ void StorageNode<V>::EraseNode(size_t idx)
     m_childs.erase(m_childs.begin() + idx);
 }
 
-template<class V>
-void StorageNode<V>::Mount(const Volume<V>& vol, size_t priority, FileIndex idx)
+template<class V, size_t BranchFactor>
+void StorageNode<V, BranchFactor>::Mount(const Volume<V>& vol, size_t priority, FileIndex idx)
 {
     m_volumeNodes.insert({ priority, vol.GetCustomNode(idx) });
 }
 
-template<class V>
-std::vector<V> StorageNode<V>::Get(const Key& key) const
+template<class V, size_t BranchFactor>
+std::vector<V> StorageNode<V, BranchFactor>::Get(const Key& key) const
 {
     std::vector<V> values;
     std::optional<V> foundValue;

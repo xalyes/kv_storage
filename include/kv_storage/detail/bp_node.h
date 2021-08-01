@@ -19,24 +19,19 @@ constexpr uint32_t Half(uint32_t num)
 }
 
 //-------------------------------------------------------------------------------
-constexpr size_t B = 150;
-constexpr size_t MaxKeys = B - 1;
-constexpr size_t MinKeys = Half(B);
-
-//-------------------------------------------------------------------------------
-template<class V>
+template<class V, size_t BranchFactor>
 class BPNode;
 
 //-------------------------------------------------------------------------------
-template<class V>
-using BPCache = lru_cache<FileIndex, std::shared_ptr<BPNode<V>>>;
+template<class V, size_t BranchFactor>
+using BPCache = lru_cache<FileIndex, std::shared_ptr<BPNode<V, BranchFactor>>>;
 
 //-------------------------------------------------------------------------------
 // ptr to new created BPNode & key to be inserted to parent node
-template<class V>
+template<class V, size_t BranchFactor>
 struct CreatedBPNode
 {
-    std::shared_ptr<BPNode<V>> node;
+    std::shared_ptr<BPNode<V, BranchFactor>> node;
     Key key;
 };
 
@@ -51,12 +46,12 @@ enum class DeleteType
 };
 
 //-------------------------------------------------------------------------------
-template<class V>
+template<class V, size_t BranchFactor>
 struct DeleteResult
 {
     DeleteType type;
     std::optional<Key> key;
-    std::shared_ptr<BPNode<V>> node;
+    std::shared_ptr<BPNode<V, BranchFactor>> node;
 };
 
 //-------------------------------------------------------------------------------
@@ -69,13 +64,13 @@ struct Sibling
 //-------------------------------------------------------------------------------
 //                                BPNode
 //-------------------------------------------------------------------------------
-template<class V>
+template<class V, size_t BranchFactor>
 class BPNode
 {
 public:
-    template<class V> friend class VolumeEnumerator;
+    template<class V, size_t BranchFactor> friend class VolumeEnumerator;
 
-    BPNode(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
+    BPNode(const fs::path& dir, std::weak_ptr<BPCache<V, BranchFactor>> cache, FileIndex idx)
         : m_dir(dir)
         , m_cache(cache)
         , m_index(idx)
@@ -84,7 +79,7 @@ public:
         m_keys.fill(0);
     }
 
-    BPNode(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys)
+    BPNode(const fs::path& dir, std::weak_ptr<BPCache<V, BranchFactor>> cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, BranchFactor - 1>&& newKeys)
         : m_dir(dir)
         , m_cache(cache)
         , m_index(idx)
@@ -113,45 +108,45 @@ public:
 
 protected:
     const fs::path m_dir;
-    std::weak_ptr<BPCache<V>> m_cache;
+    std::weak_ptr<BPCache<V, BranchFactor>> m_cache;
     FileIndex m_index{ 0 };
     uint32_t m_keyCount{ 0 };
-    std::array<Key, MaxKeys> m_keys;
+    std::array<Key, BranchFactor - 1> m_keys;
     bool m_dirty;
 };
 
 //-------------------------------------------------------------------------------
-template<class V>
-uint32_t BPNode<V>::GetKeyCount() const
+template<class V, size_t BranchFactor>
+uint32_t BPNode<V, BranchFactor>::GetKeyCount() const
 {
     return m_keyCount;
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-Key BPNode<V>::GetLastKey() const
+template<class V, size_t BranchFactor>
+Key BPNode<V, BranchFactor>::GetLastKey() const
 {
     return m_keys[m_keyCount - 1];
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-FileIndex BPNode<V>::GetIndex() const
+template<class V, size_t BranchFactor>
+FileIndex BPNode<V, BranchFactor>::GetIndex() const
 {
     return m_index;
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void BPNode<V>::SetIndex(FileIndex index)
+template<class V, size_t BranchFactor>
+void BPNode<V, BranchFactor>::SetIndex(FileIndex index)
 {
     m_index = index;
     m_dirty = true;
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void BPNode<V>::MarkAsDeleted()
+template<class V, size_t BranchFactor>
+void BPNode<V, BranchFactor>::MarkAsDeleted()
 {
     m_dirty = false;
 }

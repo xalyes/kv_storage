@@ -12,18 +12,18 @@ namespace kv_storage {
 //-------------------------------------------------------------------------------
 //                                  Node
 //-------------------------------------------------------------------------------
-template<class V>
-class Node : public BPNode<V>, public std::enable_shared_from_this<BPNode<V>>
+template<class V, size_t BranchFactor>
+class Node : public BPNode<V, BranchFactor>, public std::enable_shared_from_this<BPNode<V, BranchFactor>>
 {
 public:
-    Node(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
+    Node(const fs::path& dir, std::weak_ptr<BPCache<V, BranchFactor>> cache, FileIndex idx)
         : BPNode(dir, cache, idx)
     {
         m_ptrs.fill(0);
     }
 
-    Node(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::array<FileIndex, B>&& newPtrs)
-        : BPNode<V>(dir, cache, idx, newKeyCount, std::move(newKeys))
+    Node(const fs::path& dir, std::weak_ptr<BPCache<V, BranchFactor>> cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, BranchFactor - 1>&& newKeys, std::array<FileIndex, BranchFactor>&& newPtrs)
+        : BPNode<V, BranchFactor>(dir, cache, idx, newKeyCount, std::move(newKeys))
         , m_ptrs(newPtrs)
     {}
 
@@ -33,37 +33,37 @@ public:
     virtual void Flush() override;
     virtual std::optional<V> Get(Key key) const override;
     virtual Key GetMinimum() const override;
-    virtual std::shared_ptr<BPNode<V>> GetFirstLeaf() override;
+    virtual std::shared_ptr<BPNode<V, BranchFactor>> GetFirstLeaf() override;
     virtual bool IsLeaf() const override;
 
-    std::optional<CreatedBPNode<V>> Put(Key key, const CreatedBPNode<V>& newNode, IndexManager& indexManager);
-    DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, const DeleteResult<V>& deleteResult, uint32_t childPos, std::shared_ptr<BPNode<V>> foundChild, IndexManager& indexManager);
-    std::shared_ptr<BPNode<V>> GetChildByKey(Key key) const;
-    std::shared_ptr<BPNode<V>> GetChildByKey(Key key, std::optional<Sibling>& leftSibling, std::optional<Sibling>& rightSibling, uint32_t& childPos) const;
+    std::optional<CreatedBPNode<V, BranchFactor>> Put(Key key, const CreatedBPNode<V, BranchFactor>& newNode, IndexManager& indexManager);
+    DeleteResult<V, BranchFactor> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, const DeleteResult<V, BranchFactor>& deleteResult, uint32_t childPos, std::shared_ptr<BPNode<V, BranchFactor>> foundChild, IndexManager& indexManager);
+    std::shared_ptr<BPNode<V, BranchFactor>> GetChildByKey(Key key) const;
+    std::shared_ptr<BPNode<V, BranchFactor>> GetChildByKey(Key key, std::optional<Sibling>& leftSibling, std::optional<Sibling>& rightSibling, uint32_t& childPos) const;
 
 private:
     uint32_t FindKeyPosition(Key key) const;
 
-    std::array<FileIndex, B> m_ptrs;
+    std::array<FileIndex, BranchFactor> m_ptrs;
 };
 
 //-------------------------------------------------------------------------------
-template <class V>
-Node<V>::~Node()
+template <class V, size_t BranchFactor>
+Node<V, BranchFactor>::~Node()
 {
     Flush();
 }
 
 //-------------------------------------------------------------------------------
-template <class V>
-bool Node<V>::IsLeaf() const
+template <class V, size_t BranchFactor>
+bool Node<V, BranchFactor>::IsLeaf() const
 {
     return false;
 }
 
 //-------------------------------------------------------------------------------
-template <class V>
-std::shared_ptr<BPNode<V>> Node<V>::GetChildByKey(Key key, std::optional<Sibling>& leftSibling, std::optional<Sibling>& rightSibling, uint32_t& childPos) const
+template <class V, size_t BranchFactor>
+std::shared_ptr<BPNode<V, BranchFactor>> Node<V, BranchFactor>::GetChildByKey(Key key, std::optional<Sibling>& leftSibling, std::optional<Sibling>& rightSibling, uint32_t& childPos) const
 {
     childPos = FindKeyPosition(key);
 
@@ -83,20 +83,23 @@ std::shared_ptr<BPNode<V>> Node<V>::GetChildByKey(Key key, std::optional<Sibling
         }
     }
 
-    return CreateBPNode<V>(m_dir, m_cache, m_ptrs[childPos]);
+    return CreateBPNode<V, BranchFactor>(m_dir, m_cache, m_ptrs[childPos]);
 }
 
 //-------------------------------------------------------------------------------
-template <class V>
-std::shared_ptr<BPNode<V>> Node<V>::GetChildByKey(Key key) const
+template <class V, size_t BranchFactor>
+std::shared_ptr<BPNode<V, BranchFactor>> Node<V, BranchFactor>::GetChildByKey(Key key) const
 {
-    return CreateBPNode<V>(m_dir, m_cache, m_ptrs[FindKeyPosition(key)]);
+    return CreateBPNode<V, BranchFactor>(m_dir, m_cache, m_ptrs[FindKeyPosition(key)]);
 }
 
 //-------------------------------------------------------------------------------
-template <class V>
-std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const CreatedBPNode<V>& newNode, IndexManager& indexManager)
+template <class V, size_t BranchFactor>
+std::optional<CreatedBPNode<V, BranchFactor>> Node<V, BranchFactor>::Put(Key key, const CreatedBPNode<V, BranchFactor>& newNode, IndexManager& indexManager)
 {
+    constexpr auto MaxKeys = BranchFactor - 1;
+    constexpr auto B = BranchFactor;
+
     if (m_keyCount == MaxKeys)
     {
         // Must split this node
@@ -186,7 +189,7 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const CreatedBPNode<V>& ne
             m_index = indexManager.FindFreeIndex(m_dir);
         }
 
-        return std::optional<CreatedBPNode<V>>({ std::move(newNode), keyToDelete });
+        return std::optional<CreatedBPNode<V, BranchFactor>>({ std::move(newNode), keyToDelete });
     }
     else
     {
@@ -214,8 +217,8 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const CreatedBPNode<V>& ne
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-uint32_t Node<V>::FindKeyPosition(Key key) const
+template<class V, size_t BranchFactor>
+uint32_t Node<V, BranchFactor>::FindKeyPosition(Key key) const
 {
     for (uint32_t i = 0; i < m_keyCount; i++)
     {
@@ -229,10 +232,10 @@ uint32_t Node<V>::FindKeyPosition(Key key) const
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-std::optional<V> Node<V>::Get(Key key) const
+template<class V, size_t BranchFactor>
+std::optional<V> Node<V, BranchFactor>::Get(Key key) const
 {
-    std::shared_ptr<const BPNode<V>> current = shared_from_this();
+    std::shared_ptr<const BPNode<V, BranchFactor>> current = shared_from_this();
     auto firstLock = std::make_unique<boost::shared_lock<boost::shared_mutex>>(current->m_mutex);
     std::unique_ptr<boost::shared_lock<boost::shared_mutex>> secondLock;
 
@@ -240,7 +243,7 @@ std::optional<V> Node<V>::Get(Key key) const
     {
         if (!current->IsLeaf())
         {
-            auto currentNode = std::static_pointer_cast<const Node<V>>(current);
+            auto currentNode = std::static_pointer_cast<const Node<V, BranchFactor>>(current);
 
             auto child = currentNode->GetChildByKey(key);
 
@@ -259,9 +262,13 @@ std::optional<V> Node<V>::Get(Key key) const
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, const DeleteResult<V>& deleteResult, uint32_t childPos, std::shared_ptr<BPNode<V>> foundChild, IndexManager& indexManager)
+template<class V, size_t BranchFactor>
+DeleteResult<V, BranchFactor> Node<V, BranchFactor>::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, const DeleteResult<V, BranchFactor>& deleteResult, uint32_t childPos, std::shared_ptr<BPNode<V, BranchFactor>> foundChild, IndexManager& indexManager)
 {
+    constexpr auto MinKeys = Half(BranchFactor);
+    constexpr auto MaxKeys = BranchFactor - 1;
+    constexpr auto B = BranchFactor;
+
     if (deleteResult.type == DeleteType::Deleted)
     {
         // Key deleted.
@@ -346,7 +353,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
     // Try to borrow left sibling's key...
     if (leftSibling)
     {
-        leftSiblingNode = std::static_pointer_cast<Node>(CreateBPNode<V>(m_dir, m_cache, leftSibling->index));
+        leftSiblingNode = std::static_pointer_cast<Node>(CreateBPNode<V, BranchFactor>(m_dir, m_cache, leftSibling->index));
 
         if (leftSiblingNode->m_keyCount > MinKeys)
         {
@@ -369,7 +376,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
     // Try to borrow right sibling's key...
     if (rightSibling)
     {
-        rightSiblingNode = std::static_pointer_cast<Node>(CreateBPNode<V>(m_dir, m_cache, rightSibling->index));
+        rightSiblingNode = std::static_pointer_cast<Node>(CreateBPNode<V, BranchFactor>(m_dir, m_cache, rightSibling->index));
 
         if (rightSiblingNode->m_keyCount > MinKeys)
         {
@@ -445,24 +452,24 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-Key Node<V>::GetMinimum() const
+template<class V, size_t BranchFactor>
+Key Node<V, BranchFactor>::GetMinimum() const
 {
-    auto child = CreateBPNode<V>(m_dir, m_cache, m_ptrs[0]);
+    auto child = CreateBPNode<V, BranchFactor>(m_dir, m_cache, m_ptrs[0]);
     return child->GetMinimum();
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-std::shared_ptr<BPNode<V>> Node<V>::GetFirstLeaf()
+template<class V, size_t BranchFactor>
+std::shared_ptr<BPNode<V, BranchFactor>> Node<V, BranchFactor>::GetFirstLeaf()
 {
-    auto child = CreateBPNode<V>(m_dir, m_cache, m_ptrs[0]);
+    auto child = CreateBPNode<V, BranchFactor>(m_dir, m_cache, m_ptrs[0]);
     return child->GetFirstLeaf();
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void Node<V>::Load()
+template<class V, size_t BranchFactor>
+void Node<V, BranchFactor>::Load()
 {
     boost::unique_lock<boost::shared_mutex> lock(m_mutex);
 
@@ -489,8 +496,8 @@ void Node<V>::Load()
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void Node<V>::Flush()
+template<class V, size_t BranchFactor>
+void Node<V, BranchFactor>::Flush()
 {
     boost::unique_lock<boost::shared_mutex> lock(m_mutex);
 
@@ -520,17 +527,17 @@ void Node<V>::Flush()
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-std::shared_ptr<BPNode<V>> CreateEmptyBPNode(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
+template<class V, size_t BranchFactor>
+std::shared_ptr<BPNode<V, BranchFactor>> CreateEmptyBPNode(const fs::path& dir, std::weak_ptr<BPCache<V, BranchFactor>> cache, FileIndex idx)
 {
-    auto leaf = std::make_shared<Leaf<V>>(dir, cache, idx);
+    auto leaf = std::make_shared<Leaf<V, BranchFactor>>(dir, cache, idx);
     cache.lock()->insert(idx, leaf);
     return leaf;
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-std::shared_ptr<BPNode<V>> CreateBPNode(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
+template<class V, size_t BranchFactor>
+std::shared_ptr<BPNode<V, BranchFactor>> CreateBPNode(const fs::path& dir, std::weak_ptr<BPCache<V, BranchFactor>> cache, FileIndex idx)
 {
     auto bpNode = cache.lock()->get(idx);
     if (bpNode)
@@ -547,7 +554,7 @@ std::shared_ptr<BPNode<V>> CreateBPNode(const fs::path& dir, std::weak_ptr<BPCac
     if (type == '8')
     {
         in.close();
-        auto node = std::make_shared<Node<V>>(dir, cache, idx);
+        auto node = std::make_shared<Node<V, BranchFactor>>(dir, cache, idx);
         node->Load();
         cache.lock()->insert(idx, node);
         return node;
@@ -555,7 +562,7 @@ std::shared_ptr<BPNode<V>> CreateBPNode(const fs::path& dir, std::weak_ptr<BPCac
     else if (type == '9')
     {
         in.close();
-        auto leaf = std::make_shared<Leaf<V>>(dir, cache, idx);
+        auto leaf = std::make_shared<Leaf<V, BranchFactor>>(dir, cache, idx);
         leaf->Load();
         cache.lock()->insert(idx, leaf);
         return leaf;

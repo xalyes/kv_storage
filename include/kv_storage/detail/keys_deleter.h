@@ -13,17 +13,17 @@ namespace kv_storage {
 const std::chrono::duration AutoDeletePeriod = std::chrono::seconds(1);
 
 //-------------------------------------------------------------------------------
-template<class V>
+template<class V, size_t BranchFactor>
 class Volume;
 
 //-------------------------------------------------------------------------------
 //                            OutdatedKeysDeleter
 //-------------------------------------------------------------------------------
-template<class V>
+template<class V, size_t BranchFactor>
 class OutdatedKeysDeleter
 {
 public:
-    OutdatedKeysDeleter(Volume<V>* volume, const fs::path& directory);
+    OutdatedKeysDeleter(Volume<V, BranchFactor>* volume, const fs::path& directory);
     ~OutdatedKeysDeleter();
     void Start();
     void Put(Key key, uint32_t ttl);
@@ -36,12 +36,12 @@ private:
     std::unordered_map<Key, uint64_t> m_ttls;
     std::thread m_worker;
     std::atomic_bool m_stop{ false };
-    Volume<V>* m_volume;
+    Volume<V, BranchFactor>* m_volume;
 };
 
 //-------------------------------------------------------------------------------
-template<class V>
-OutdatedKeysDeleter<V>::OutdatedKeysDeleter(Volume<V>* volume, const fs::path& directory)
+template<class V, size_t BranchFactor>
+OutdatedKeysDeleter<V, BranchFactor>::OutdatedKeysDeleter(Volume<V, BranchFactor>* volume, const fs::path& directory)
     : m_dir(directory)
 {
     m_volume = volume;
@@ -51,8 +51,8 @@ OutdatedKeysDeleter<V>::OutdatedKeysDeleter(Volume<V>* volume, const fs::path& d
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-OutdatedKeysDeleter<V>::~OutdatedKeysDeleter()
+template<class V, size_t BranchFactor>
+OutdatedKeysDeleter<V, BranchFactor>::~OutdatedKeysDeleter()
 {
     if (m_worker.joinable())
     {
@@ -64,8 +64,8 @@ OutdatedKeysDeleter<V>::~OutdatedKeysDeleter()
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void OutdatedKeysDeleter<V>::Start()
+template<class V, size_t BranchFactor>
+void OutdatedKeysDeleter<V, BranchFactor>::Start()
 {
     if (m_worker.joinable())
         throw std::runtime_error("Worker thread already started");
@@ -118,8 +118,8 @@ void OutdatedKeysDeleter<V>::Start()
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void OutdatedKeysDeleter<V>::Put(Key key, uint32_t ttl)
+template<class V, size_t BranchFactor>
+void OutdatedKeysDeleter<V, BranchFactor>::Put(Key key, uint32_t ttl)
 {
     std::chrono::system_clock::time_point tp = std::chrono::system_clock::now();
     std::chrono::system_clock::duration dur = tp.time_since_epoch();
@@ -131,15 +131,15 @@ void OutdatedKeysDeleter<V>::Put(Key key, uint32_t ttl)
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void OutdatedKeysDeleter<V>::Delete(Key key)
+template<class V, size_t BranchFactor>
+void OutdatedKeysDeleter<V, BranchFactor>::Delete(Key key)
 {
     m_ttls.erase(key);
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void OutdatedKeysDeleter<V>::Flush()
+template<class V, size_t BranchFactor>
+void OutdatedKeysDeleter<V, BranchFactor>::Flush()
 {
     std::ofstream out;
     out.exceptions(~std::ofstream::goodbit);
@@ -159,8 +159,8 @@ void OutdatedKeysDeleter<V>::Flush()
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void OutdatedKeysDeleter<V>::Load()
+template<class V, size_t BranchFactor>
+void OutdatedKeysDeleter<V, BranchFactor>::Load()
 {
     std::ifstream in;
     in.exceptions(~std::ofstream::goodbit);

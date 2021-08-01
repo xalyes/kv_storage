@@ -12,21 +12,21 @@ namespace kv_storage {
 //-------------------------------------------------------------------------------
 //                                  Leaf
 //-------------------------------------------------------------------------------
-template <class V>
+template <class V, size_t BranchFactor>
 class Leaf
-    : public BPNode<V>
-    , public std::enable_shared_from_this<BPNode<V>>
+    : public BPNode<V, BranchFactor>
+    , public std::enable_shared_from_this<BPNode<V, BranchFactor>>
 {
 public:
-    template<class V> friend class VolumeEnumerator;
+    template<class V, size_t BranchFactor> friend class VolumeEnumerator;
 
-    Leaf(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
+    Leaf(const fs::path& dir, std::weak_ptr<BPCache<V, BranchFactor>> cache, FileIndex idx)
         : BPNode(dir, cache, idx)
     {
     }
 
-    Leaf(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, MaxKeys>&& newKeys, std::vector<V>&& newValues, FileIndex newNextBatch)
-        : BPNode<V>(dir, cache, idx, newKeyCount, std::move(newKeys))
+    Leaf(const fs::path& dir, std::weak_ptr<BPCache<V, BranchFactor>> cache, FileIndex idx, uint32_t newKeyCount, std::array<Key, BranchFactor - 1>&& newKeys, std::vector<V>&& newValues, FileIndex newNextBatch)
+        : BPNode<V, BranchFactor>(dir, cache, idx, newKeyCount, std::move(newKeys))
         , m_values(newValues)
         , m_nextBatch(newNextBatch)
     {}
@@ -35,20 +35,20 @@ public:
 
     virtual void Flush() override;
     virtual void Load() override;
-    virtual std::optional<CreatedBPNode<V>> Put(Key key, const V& val, IndexManager& indexManager);
+    virtual std::optional<CreatedBPNode<V, BranchFactor>> Put(Key key, const V& val, IndexManager& indexManager);
     virtual std::optional<V> Get(Key key) const override;
-    virtual DeleteResult<V> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, IndexManager& indexManager);
+    virtual DeleteResult<V, BranchFactor> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, IndexManager& indexManager);
     virtual Key GetMinimum() const override;
-    virtual std::shared_ptr<BPNode<V>> GetFirstLeaf() override;
+    virtual std::shared_ptr<BPNode<V, BranchFactor>> GetFirstLeaf() override;
     virtual bool IsLeaf() const override;
 
 private:
-    CreatedBPNode<V> SplitAndPut(Key key, const V& value, IndexManager& indexManager);
-    void LeftJoin(const Leaf<V>& leaf);
-    void RightJoin(const Leaf<V>& leaf);
+    CreatedBPNode<V, BranchFactor> SplitAndPut(Key key, const V& value, IndexManager& indexManager);
+    void LeftJoin(const Leaf<V, BranchFactor>& leaf);
+    void RightJoin(const Leaf<V, BranchFactor>& leaf);
     void Insert(Key key, const V& value, uint32_t pos);
 
-    template<class V>
+    template<class V, size_t BranchFactor>
     typename std::enable_if<
         std::is_same<V, float>::value
      || std::is_same<V, uint32_t>::value
@@ -66,7 +66,7 @@ private:
         }
     }
 
-    template<class V>
+    template<class V, size_t BranchFactor>
     typename std::enable_if<
         std::is_same<V, std::string>::value
      || std::is_same<V, std::vector<char>>::value, void>::type
@@ -85,7 +85,7 @@ private:
         }
     }
 
-    template<class V>
+    template<class V, size_t BranchFactor>
     typename std::enable_if<
         std::is_same<V, float>::value
      || std::is_same<V, uint32_t>::value
@@ -100,7 +100,7 @@ private:
         }
     }
 
-    template<class V>
+    template<class V, size_t BranchFactor>
     typename std::enable_if<
         std::is_same<V, std::string>::value
      || std::is_same<V, std::vector<char>>::value, void>::type
@@ -120,29 +120,29 @@ private:
 };
 
 //-------------------------------------------------------------------------------
-template <class V>
-Leaf<V>::~Leaf()
+template <class V, size_t BranchFactor>
+Leaf<V, BranchFactor>::~Leaf()
 {
     Flush();
 }
 
 //-------------------------------------------------------------------------------
-template <class V>
-bool Leaf<V>::IsLeaf() const
+template <class V, size_t BranchFactor>
+bool Leaf<V, BranchFactor>::IsLeaf() const
 {
     return true;
 }
 
 //-------------------------------------------------------------------------------
-template <class V>
-std::shared_ptr<BPNode<V>> Leaf<V>::GetFirstLeaf()
+template <class V, size_t BranchFactor>
+std::shared_ptr<BPNode<V, BranchFactor>> Leaf<V, BranchFactor>::GetFirstLeaf()
 {
     return shared_from_this();
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void Leaf<V>::Insert(Key key, const V& value, uint32_t pos)
+template<class V, size_t BranchFactor>
+void Leaf<V, BranchFactor>::Insert(Key key, const V& value, uint32_t pos)
 {
     InsertToArray(m_keys, pos, key);
     m_values.insert(m_values.begin() + pos, value);
@@ -151,9 +151,10 @@ void Leaf<V>::Insert(Key key, const V& value, uint32_t pos)
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-std::optional<CreatedBPNode<V>> Leaf<V>::Put(Key key, const V& val, IndexManager& indexManager)
+template<class V, size_t BranchFactor>
+std::optional<CreatedBPNode<V, BranchFactor>> Leaf<V, BranchFactor>::Put(Key key, const V& val, IndexManager& indexManager)
 {
+    constexpr auto MaxKeys = BranchFactor - 1;
     if (m_keyCount == MaxKeys)
     {
         if (m_index == 1)
@@ -201,9 +202,11 @@ std::optional<CreatedBPNode<V>> Leaf<V>::Put(Key key, const V& val, IndexManager
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, IndexManager& indexManager)
+template<class V, size_t BranchFactor>
+CreatedBPNode<V, BranchFactor> Leaf<V, BranchFactor>::SplitAndPut(Key key, const V& value, IndexManager& indexManager)
 {
+    constexpr auto MaxKeys = BranchFactor - 1;
+
     uint32_t copyCount = MaxKeys / 2;
 
     std::array<Key, MaxKeys> newKeys;
@@ -247,8 +250,8 @@ CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, IndexManager& ind
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-std::optional<V> Leaf<V>::Get(Key key) const
+template<class V, size_t BranchFactor>
+std::optional<V> Leaf<V, BranchFactor>::Get(Key key) const
 {
     for (size_t i = 0; i < m_keyCount; i++)
     {
@@ -262,10 +265,10 @@ std::optional<V> Leaf<V>::Get(Key key) const
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void Leaf<V>::LeftJoin(const Leaf<V>& leaf)
+template<class V, size_t BranchFactor>
+void Leaf<V, BranchFactor>::LeftJoin(const Leaf<V, BranchFactor>& leaf)
 {
-    std::array<Key, MaxKeys> newKeys = leaf.m_keys;
+    std::array<Key, BranchFactor - 1> newKeys = leaf.m_keys;
 
     for (uint32_t i = leaf.m_keyCount; i <= m_keyCount + leaf.m_keyCount - 1; i++)
     {
@@ -278,8 +281,8 @@ void Leaf<V>::LeftJoin(const Leaf<V>& leaf)
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void Leaf<V>::RightJoin(const Leaf<V>& leaf)
+template<class V, size_t BranchFactor>
+void Leaf<V, BranchFactor>::RightJoin(const Leaf<V, BranchFactor>& leaf)
 {
     for (uint32_t i = m_keyCount; i <= m_keyCount + leaf.m_keyCount - 1; i++)
     {
@@ -292,12 +295,12 @@ void Leaf<V>::RightJoin(const Leaf<V>& leaf)
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-std::shared_ptr<BPNode<V>> CreateBPNode(const fs::path& dir, BPCache<V>& cache, FileIndex idx);
+template<class V, size_t BranchFactor>
+std::shared_ptr<BPNode<V, BranchFactor>> CreateBPNode(const fs::path& dir, BPCache<V, BranchFactor>& cache, FileIndex idx);
 
 //-------------------------------------------------------------------------------
-template<class V>
-DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, IndexManager& indexManager)
+template<class V, size_t BranchFactor>
+DeleteResult<V, BranchFactor> Leaf<V, BranchFactor>::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, IndexManager& indexManager)
 {
     for (size_t i = 0; i < m_keyCount; i++)
     {
@@ -311,7 +314,7 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
 
             // 2. Check key count.
             // If we have too few keys and this leaf is not root we should make some additional changes.
-            if (m_index == 1 || m_keyCount >= MinKeys)
+            if (m_index == 1 || m_keyCount >= Half(BranchFactor))
             {
                 return { DeleteType::Deleted, std::nullopt };
             }
@@ -322,9 +325,9 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
             // 3. If left sibling has enough keys we can simple borrow the entry.
             if (leftSibling)
             {
-                leftSiblingLeaf = std::static_pointer_cast<Leaf<V>>(CreateBPNode<V>(m_dir, m_cache, leftSibling->index));
+                leftSiblingLeaf = std::static_pointer_cast<Leaf<V, BranchFactor>>(CreateBPNode<V, BranchFactor>(m_dir, m_cache, leftSibling->index));
 
-                if (leftSiblingLeaf->m_keyCount > MinKeys)
+                if (leftSiblingLeaf->m_keyCount > Half(BranchFactor))
                 {
                     auto key = leftSiblingLeaf->GetLastKey();
                     auto value = leftSiblingLeaf->m_values[leftSiblingLeaf->m_keyCount - 1];
@@ -337,9 +340,9 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
             // 4. If right sibling has enough keys we can simple borrow the entry.
             if (rightSibling)
             {
-                rightSiblingLeaf = std::static_pointer_cast<Leaf>(CreateBPNode<V>(m_dir, m_cache, rightSibling->index));
+                rightSiblingLeaf = std::static_pointer_cast<Leaf>(CreateBPNode<V, BranchFactor>(m_dir, m_cache, rightSibling->index));
 
-                if (rightSiblingLeaf->m_keyCount > MinKeys)
+                if (rightSiblingLeaf->m_keyCount > Half(BranchFactor))
                 {
                     auto key = rightSiblingLeaf->m_keys[0];
                     auto value = rightSiblingLeaf->m_values[0];
@@ -379,15 +382,15 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
 }
 
 //-------------------------------------------------------------------------------
-template <class V>
-Key Leaf<V>::GetMinimum() const
+template <class V, size_t BranchFactor>
+Key Leaf<V, BranchFactor>::GetMinimum() const
 {
     return m_keys[0];
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void Leaf<V>::Flush()
+template<class V, size_t BranchFactor>
+void Leaf<V, BranchFactor>::Flush()
 {
     boost::unique_lock<boost::shared_mutex> lock(m_mutex);
 
@@ -409,15 +412,15 @@ void Leaf<V>::Flush()
         out.write(reinterpret_cast<char*>(&key), sizeof(key));
     }
 
-    WriteValues<V>(out);
+    WriteValues<V, BranchFactor>(out);
 
     auto nextBatch = boost::endian::native_to_little(m_nextBatch);
     out.write(reinterpret_cast<char*>(&(nextBatch)), sizeof(nextBatch));
 }
 
 //-------------------------------------------------------------------------------
-template<class V>
-void Leaf<V>::Load()
+template<class V, size_t BranchFactor>
+void Leaf<V, BranchFactor>::Load()
 {
     boost::unique_lock<boost::shared_mutex> lock(m_mutex);
 
@@ -438,7 +441,7 @@ void Leaf<V>::Load()
         boost::endian::little_to_native_inplace(m_keys[i]);
     }
 
-    ReadValues<V>(in);
+    ReadValues<V, BranchFactor>(in);
 
     in.read(reinterpret_cast<char*>(&(m_nextBatch)), sizeof(m_nextBatch));
     boost::endian::little_to_native_inplace(m_nextBatch);
