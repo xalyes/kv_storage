@@ -91,12 +91,13 @@ public:
     Volume(Volume&&) noexcept;
     Volume& operator= (Volume&&) noexcept;
 
-    virtual void Put(const Key& key, const V& value, std::optional<uint32_t> keyTtl = std::nullopt);
-    virtual std::optional<V> Get(const Key& key) const;
-    virtual void Delete(const Key& key);
-    virtual std::shared_ptr<BPNode<V, BranchFactor>> GetCustomNode(FileIndex idx) const;
-    virtual std::unique_ptr<VolumeEnumerator<V, BranchFactor>> Enumerate() const;
-    virtual ~Volume() = default;
+    void Put(const Key& key, const V& value, std::optional<uint32_t> keyTtl = std::nullopt);
+    std::optional<V> Get(const Key& key) const;
+    void Delete(const Key& key);
+    std::shared_ptr<BPNode<V, BranchFactor>> GetCustomNode(FileIndex idx) const;
+    std::unique_ptr<VolumeEnumerator<V, BranchFactor>> Enumerate() const;
+    void StopAndFlush();
+    ~Volume();
 
     void StartAutoDelete();
 
@@ -104,7 +105,6 @@ private:
     std::unique_ptr<OutdatedKeysDeleter<V, BranchFactor>> m_deleter;
     std::shared_ptr<BPNode<V, BranchFactor>> m_root;
     const fs::path m_dir;
-    FileIndex m_nodesCount;
     mutable std::shared_ptr<BPCache<V, BranchFactor>> m_cache;
     IndexManager m_indexManager;
     mutable boost::shared_mutex m_mutex;
@@ -116,7 +116,6 @@ Volume<V, BranchFactor>::Volume(Volume<V, BranchFactor>&& other) noexcept
     : m_deleter(std::move(other.m_deleter))
     , m_root(std::move(other.m_root))
     , m_dir(std::move(other.m_dir))
-    , m_nodesCount(std::move(other.m_nodesCount))
     , m_cache(std::move(other.m_cache))
     , m_indexManager(m_dir)
 {}
@@ -128,9 +127,31 @@ Volume<V, BranchFactor>& Volume<V, BranchFactor>::operator= (Volume<V, BranchFac
     m_deleter = std::move(m_deleter);
     m_root = std::move(other.m_root);
     m_dir = std::move(other.m_dir);
-    m_nodesCount = std::move(other.m_nodesCount);
     m_cache = std::move(other.m_cache);
     m_indexManager = IndexManager(m_dir);
+}
+
+//-------------------------------------------------------------------------------
+template<class V, size_t BranchFactor>
+void Volume<V, BranchFactor>::StopAndFlush()
+{
+    m_deleter->Stop();
+    m_deleter->Flush();
+    m_root->Flush();
+    m_cache->clear();
+}
+
+//-------------------------------------------------------------------------------
+template<class V, size_t BranchFactor>
+Volume<V, BranchFactor>::~Volume()
+{
+    try
+    {
+        StopAndFlush();
+    }
+    catch (...)
+    {
+    }
 }
 
 //-------------------------------------------------------------------------------
@@ -408,7 +429,8 @@ void Volume<V, BranchFactor>::Delete(const Key& key)
 template<class V, size_t BranchFactor>
 Volume<V, BranchFactor>::Volume(const fs::path& directory, size_t cacheSize)
     : m_dir(directory)
-    , m_cache(std::make_shared<BPCache<V, BranchFactor>>(cacheSize))
+    , m_cache(std::make_shared<BPCache<V, BranchFactor>>(cacheSize
+        , [](std::shared_ptr<BPNode<V, BranchFactor>>& node) { node->Flush(); }))
     , m_indexManager(m_dir)
 {
     if (!fs::exists(m_dir / "batch_1.dat"))
@@ -421,7 +443,6 @@ Volume<V, BranchFactor>::Volume(const fs::path& directory, size_t cacheSize)
         m_root = CreateBPNode<V, BranchFactor>(m_dir, m_cache, 1);
     }
     m_cache->insert(1, m_root);
-    m_nodesCount = 1;
 }
 
 //-------------------------------------------------------------------------------

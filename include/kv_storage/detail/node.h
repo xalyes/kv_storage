@@ -51,7 +51,13 @@ private:
 template <class V, size_t BranchFactor>
 Node<V, BranchFactor>::~Node()
 {
-    Flush();
+    try
+    {
+        Flush();
+    }
+    catch (...)
+    {
+    }
 }
 
 //-------------------------------------------------------------------------------
@@ -524,6 +530,8 @@ void Node<V, BranchFactor>::Flush()
         auto ptr = boost::endian::native_to_little(m_ptrs[i]);
         out.write(reinterpret_cast<char*>(&ptr), sizeof(ptr));
     }
+    out.close();
+    m_dirty = false;
 }
 
 //-------------------------------------------------------------------------------

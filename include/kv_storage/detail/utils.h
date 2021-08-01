@@ -5,6 +5,7 @@
 #include <list>
 #include <array>
 #include <optional>
+#include <functional>
 #include <filesystem>
 #include <boost/endian/conversion.hpp>
 #include <boost/thread/shared_mutex.hpp>
@@ -155,13 +156,21 @@ public:
                 std::pair<value_type, typename list_type::iterator>
             > map_type;
 
-    lru_cache(size_t capacity)
+    lru_cache(size_t capacity, std::function<void(Value&)> disposer = [](Value& v) {})
         : m_capacity(capacity)
+        , m_disposer(disposer)
     {
     }
 
     ~lru_cache()
     {
+        try
+        {
+            clear();
+        }
+        catch (...)
+        {
+        }
     }
 
     size_t size() const
@@ -261,6 +270,12 @@ public:
     void clear()
     {
         boost::unique_lock<boost::shared_mutex> lock(m_mutex);
+
+        for (auto& item : m_map)
+        {
+            m_disposer(item.second.first);
+        }
+
         m_map.clear();
         m_list.clear();
     }
@@ -270,7 +285,10 @@ private:
     {
         // evict item from the end of most recently used list
         typename list_type::iterator i = --m_list.end();
-        m_map.erase(*i);
+        auto it = m_map.find(*i);
+        m_disposer(it->second.first);
+
+        m_map.erase(it);
         m_list.erase(i);
     }
 
@@ -279,6 +297,7 @@ private:
     list_type m_list;
     size_t m_capacity;
     mutable boost::shared_mutex m_mutex;
+    std::function<void(Value&)> m_disposer;
 };
 
 } // kv_storage

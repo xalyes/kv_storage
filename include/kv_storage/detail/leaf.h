@@ -123,7 +123,13 @@ private:
 template <class V, size_t BranchFactor>
 Leaf<V, BranchFactor>::~Leaf()
 {
-    Flush();
+    try
+    {
+        Flush();
+    }
+    catch (...)
+    {
+    }
 }
 
 //-------------------------------------------------------------------------------
@@ -416,6 +422,8 @@ void Leaf<V, BranchFactor>::Flush()
 
     auto nextBatch = boost::endian::native_to_little(m_nextBatch);
     out.write(reinterpret_cast<char*>(&(nextBatch)), sizeof(nextBatch));
+    out.close();
+    m_dirty = false;
 }
 
 //-------------------------------------------------------------------------------

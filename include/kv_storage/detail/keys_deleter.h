@@ -26,6 +26,7 @@ public:
     OutdatedKeysDeleter(Volume<V, BranchFactor>* volume, const fs::path& directory);
     ~OutdatedKeysDeleter();
     void Start();
+    void Stop();
     void Put(Key key, uint32_t ttl);
     void Delete(Key key);
     void Flush();
@@ -33,7 +34,11 @@ public:
 
 private:
     const fs::path m_dir;
+
+    boost::shared_mutex m_mutex;
     std::unordered_map<Key, uint64_t> m_ttls;
+    bool m_dirty{ true };
+
     std::thread m_worker;
     std::atomic_bool m_stop{ false };
     Volume<V, BranchFactor>* m_volume;
@@ -43,24 +48,36 @@ private:
 template<class V, size_t BranchFactor>
 OutdatedKeysDeleter<V, BranchFactor>::OutdatedKeysDeleter(Volume<V, BranchFactor>* volume, const fs::path& directory)
     : m_dir(directory)
+    , m_volume(volume)
 {
-    m_volume = volume;
-
     if (fs::exists(m_dir / "keys_ttls.dat"))
         Load();
 }
 
 //-------------------------------------------------------------------------------
 template<class V, size_t BranchFactor>
-OutdatedKeysDeleter<V, BranchFactor>::~OutdatedKeysDeleter()
+void OutdatedKeysDeleter<V, BranchFactor>::Stop()
 {
     if (m_worker.joinable())
     {
         m_stop = true;
         m_worker.join();
     }
+}
 
-    Flush();
+//-------------------------------------------------------------------------------
+template<class V, size_t BranchFactor>
+OutdatedKeysDeleter<V, BranchFactor>::~OutdatedKeysDeleter()
+{
+    try
+    {
+        Stop();
+        Flush();
+    }
+    catch (...)
+    {
+
+    }
 }
 
 //-------------------------------------------------------------------------------
@@ -82,13 +99,17 @@ void OutdatedKeysDeleter<V, BranchFactor>::Start()
 
                 std::vector<Key> keysForDelete;
 
-                for (const auto& item : m_ttls)
                 {
-                    if (m_stop)
-                        break;
+                    boost::unique_lock<boost::shared_mutex> readLock(m_mutex);
 
-                    if (nowSeconds >= item.second)
-                        keysForDelete.push_back(item.first);
+                    for (const auto& item : m_ttls)
+                    {
+                        if (m_stop)
+                            break;
+
+                        if (nowSeconds >= item.second)
+                            keysForDelete.push_back(item.first);
+                    }
                 }
 
                 for (const auto& key : keysForDelete)
@@ -101,7 +122,10 @@ void OutdatedKeysDeleter<V, BranchFactor>::Start()
                     {
                         // key not found
                     }
+
+                    boost::unique_lock<boost::shared_mutex> lock(m_mutex);
                     m_ttls.erase(key);
+                    m_dirty = true;
                 }
 
                 const auto elapsed = std::chrono::system_clock::now() - now;
@@ -127,20 +151,31 @@ void OutdatedKeysDeleter<V, BranchFactor>::Put(Key key, uint32_t ttl)
     uint64_t seconds = dur.count() * std::chrono::system_clock::period::num / std::chrono::system_clock::period::den;
     seconds += ttl;
 
+    boost::unique_lock<boost::shared_mutex> lock(m_mutex);
+
     m_ttls.insert({ key, seconds });
+    m_dirty = true;
 }
 
 //-------------------------------------------------------------------------------
 template<class V, size_t BranchFactor>
 void OutdatedKeysDeleter<V, BranchFactor>::Delete(Key key)
 {
+    boost::unique_lock<boost::shared_mutex> lock(m_mutex);
+
     m_ttls.erase(key);
+    m_dirty = true;
 }
 
 //-------------------------------------------------------------------------------
 template<class V, size_t BranchFactor>
 void OutdatedKeysDeleter<V, BranchFactor>::Flush()
 {
+    boost::unique_lock<boost::shared_mutex> lock(m_mutex);
+
+    if (!m_dirty)
+        return;
+
     std::ofstream out;
     out.exceptions(~std::ofstream::goodbit);
     out.open(m_dir / "keys_ttls.dat", std::ios::out | std::ios::binary | std::ios::trunc);
@@ -156,12 +191,20 @@ void OutdatedKeysDeleter<V, BranchFactor>::Flush()
         auto time = boost::endian::native_to_little(ttl.second);
         out.write(reinterpret_cast<char*>(&time), sizeof(time));
     }
+
+    m_dirty = false;
+    out.close();
 }
 
 //-------------------------------------------------------------------------------
 template<class V, size_t BranchFactor>
 void OutdatedKeysDeleter<V, BranchFactor>::Load()
 {
+    boost::unique_lock<boost::shared_mutex> lock(m_mutex);
+
+    if (!m_dirty)
+        return;
+
     std::ifstream in;
     in.exceptions(~std::ofstream::goodbit);
     in.open(m_dir / "keys_ttls.dat", std::ios::in | std::ios::binary);
@@ -184,6 +227,8 @@ void OutdatedKeysDeleter<V, BranchFactor>::Load()
 
         m_ttls.insert({ key, time });
     }
+
+    m_dirty = false;
 }
 
 } // kv_storage
