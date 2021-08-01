@@ -13,6 +13,7 @@
 #include <random>
 #include <fstream>
 #include <set>
+#include <thread>
 
 #include <kv_storage/volume.h>
 #include <kv_storage/storage.h>

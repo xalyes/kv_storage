@@ -9,6 +9,9 @@ namespace fs = std::filesystem;
 
 namespace kv_storage {
 
+//-------------------------------------------------------------------------------
+//                                  Node
+//-------------------------------------------------------------------------------
 template<class V>
 class Node : public BPNode<V>, public std::enable_shared_from_this<BPNode<V>>
 {
@@ -44,18 +47,21 @@ private:
     std::array<FileIndex, B> m_ptrs;
 };
 
+//-------------------------------------------------------------------------------
 template <class V>
 Node<V>::~Node()
 {
     Flush();
 }
 
+//-------------------------------------------------------------------------------
 template <class V>
 bool Node<V>::IsLeaf() const
 {
     return false;
 }
 
+//-------------------------------------------------------------------------------
 template <class V>
 std::shared_ptr<BPNode<V>> Node<V>::GetChildByKey(Key key, std::optional<Sibling>& leftSibling, std::optional<Sibling>& rightSibling, uint32_t& childPos) const
 {
@@ -80,12 +86,14 @@ std::shared_ptr<BPNode<V>> Node<V>::GetChildByKey(Key key, std::optional<Sibling
     return CreateBPNode<V>(m_dir, m_cache, m_ptrs[childPos]);
 }
 
+//-------------------------------------------------------------------------------
 template <class V>
 std::shared_ptr<BPNode<V>> Node<V>::GetChildByKey(Key key) const
 {
     return CreateBPNode<V>(m_dir, m_cache, m_ptrs[FindKeyPosition(key)]);
 }
 
+//-------------------------------------------------------------------------------
 template <class V>
 std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const CreatedBPNode<V>& newNode, IndexManager& indexManager)
 {
@@ -205,6 +213,7 @@ std::optional<CreatedBPNode<V>> Node<V>::Put(Key key, const CreatedBPNode<V>& ne
     }
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 uint32_t Node<V>::FindKeyPosition(Key key) const
 {
@@ -219,6 +228,7 @@ uint32_t Node<V>::FindKeyPosition(Key key) const
     return m_keyCount;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 std::optional<V> Node<V>::Get(Key key) const
 {
@@ -248,6 +258,7 @@ std::optional<V> Node<V>::Get(Key key) const
     return current->Get(key);
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, const DeleteResult<V>& deleteResult, uint32_t childPos, std::shared_ptr<BPNode<V>> foundChild, IndexManager& indexManager)
 {
@@ -433,6 +444,7 @@ DeleteResult<V> Node<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
     }
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 Key Node<V>::GetMinimum() const
 {
@@ -440,6 +452,7 @@ Key Node<V>::GetMinimum() const
     return child->GetMinimum();
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 std::shared_ptr<BPNode<V>> Node<V>::GetFirstLeaf()
 {
@@ -447,6 +460,7 @@ std::shared_ptr<BPNode<V>> Node<V>::GetFirstLeaf()
     return child->GetFirstLeaf();
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 void Node<V>::Load()
 {
@@ -474,6 +488,7 @@ void Node<V>::Load()
     m_dirty = false;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 void Node<V>::Flush()
 {
@@ -501,6 +516,53 @@ void Node<V>::Flush()
     {
         auto ptr = boost::endian::native_to_little(m_ptrs[i]);
         out.write(reinterpret_cast<char*>(&ptr), sizeof(ptr));
+    }
+}
+
+//-------------------------------------------------------------------------------
+template<class V>
+std::shared_ptr<BPNode<V>> CreateEmptyBPNode(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
+{
+    auto leaf = std::make_shared<Leaf<V>>(dir, cache, idx);
+    cache.lock()->insert(idx, leaf);
+    return leaf;
+}
+
+//-------------------------------------------------------------------------------
+template<class V>
+std::shared_ptr<BPNode<V>> CreateBPNode(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
+{
+    auto bpNode = cache.lock()->get(idx);
+    if (bpNode)
+        return *bpNode;
+
+    std::ifstream in;
+    in.exceptions(~std::ifstream::goodbit);
+    in.open(fs::path(dir) / ("batch_" + std::to_string(idx) + ".dat"), std::ios::in | std::ios::binary);
+
+    char type;
+    in.read(&type, 1);
+
+    // TODO: reuse ifstream instead of closing
+    if (type == '8')
+    {
+        in.close();
+        auto node = std::make_shared<Node<V>>(dir, cache, idx);
+        node->Load();
+        cache.lock()->insert(idx, node);
+        return node;
+    }
+    else if (type == '9')
+    {
+        in.close();
+        auto leaf = std::make_shared<Leaf<V>>(dir, cache, idx);
+        leaf->Load();
+        cache.lock()->insert(idx, leaf);
+        return leaf;
+    }
+    else
+    {
+        throw std::runtime_error("Invalid file format");
     }
 }
 

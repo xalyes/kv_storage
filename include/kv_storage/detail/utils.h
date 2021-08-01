@@ -17,6 +17,7 @@ namespace kv_storage {
 
 using FileIndex = uint64_t;
 
+//-------------------------------------------------------------------------------
 template<uint32_t N>
 void InsertToSortedArray(std::array<uint64_t, N>& arr, uint32_t count, uint64_t value)
 {
@@ -33,6 +34,7 @@ void InsertToSortedArray(std::array<uint64_t, N>& arr, uint32_t count, uint64_t 
     InsertToArray(arr, count, value);
 }
 
+//-------------------------------------------------------------------------------
 template<size_t N>
 void InsertToArray(std::array<uint64_t, N>& arr, size_t pos, uint64_t val)
 {
@@ -49,6 +51,7 @@ void InsertToArray(std::array<uint64_t, N>& arr, size_t pos, uint64_t val)
     arr[pos] = val;
 }
 
+//-------------------------------------------------------------------------------
 template<size_t N>
 void RemoveFromArray(std::array<uint64_t, N>& arr, size_t pos)
 {
@@ -65,6 +68,9 @@ void RemoveFromArray(std::array<uint64_t, N>& arr, size_t pos)
     }
 }
 
+//-------------------------------------------------------------------------------
+//                              IndexManager
+//-------------------------------------------------------------------------------
 class IndexManager
 {
 public:
@@ -94,6 +100,7 @@ private:
     FileIndex m_currentIndex{ 1 };
 };
 
+//-------------------------------------------------------------------------------
 template <typename T>
 T NativeToLittleEndian(T val)
 {
@@ -116,6 +123,7 @@ T NativeToLittleEndian(T val)
     }
 }
 
+//-------------------------------------------------------------------------------
 template <typename T>
 void LittleToNativeEndianInplace(T& val)
 {
@@ -130,6 +138,9 @@ void LittleToNativeEndianInplace(T& val)
     }
 }
 
+//-------------------------------------------------------------------------------
+//                              lru_cache
+//-------------------------------------------------------------------------------
 // a cache which evicts the least recently used item when it is full
 // modified boost cache from boost/compute/detail/lru_cache.hpp
 template<class Key, class Value>

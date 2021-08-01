@@ -9,6 +9,9 @@
 
 namespace kv_storage {
 
+//-------------------------------------------------------------------------------
+//                                  Leaf
+//-------------------------------------------------------------------------------
 template <class V>
 class Leaf
     : public BPNode<V>
@@ -116,24 +119,28 @@ private:
     FileIndex m_nextBatch{ 0 };
 };
 
+//-------------------------------------------------------------------------------
 template <class V>
 Leaf<V>::~Leaf()
 {
     Flush();
 }
 
+//-------------------------------------------------------------------------------
 template <class V>
 bool Leaf<V>::IsLeaf() const
 {
     return true;
 }
 
+//-------------------------------------------------------------------------------
 template <class V>
 std::shared_ptr<BPNode<V>> Leaf<V>::GetFirstLeaf()
 {
     return shared_from_this();
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 void Leaf<V>::Insert(Key key, const V& value, uint32_t pos)
 {
@@ -143,6 +150,7 @@ void Leaf<V>::Insert(Key key, const V& value, uint32_t pos)
     m_dirty = true;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 std::optional<CreatedBPNode<V>> Leaf<V>::Put(Key key, const V& val, IndexManager& indexManager)
 {
@@ -192,6 +200,7 @@ std::optional<CreatedBPNode<V>> Leaf<V>::Put(Key key, const V& val, IndexManager
     return std::nullopt;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, IndexManager& indexManager)
 {
@@ -237,6 +246,7 @@ CreatedBPNode<V> Leaf<V>::SplitAndPut(Key key, const V& value, IndexManager& ind
     return { std::move(newLeaf), firstNewKey };
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 std::optional<V> Leaf<V>::Get(Key key) const
 {
@@ -251,6 +261,7 @@ std::optional<V> Leaf<V>::Get(Key key) const
     return std::nullopt;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 void Leaf<V>::LeftJoin(const Leaf<V>& leaf)
 {
@@ -266,6 +277,7 @@ void Leaf<V>::LeftJoin(const Leaf<V>& leaf)
     m_index = leaf.m_index;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 void Leaf<V>::RightJoin(const Leaf<V>& leaf)
 {
@@ -279,9 +291,11 @@ void Leaf<V>::RightJoin(const Leaf<V>& leaf)
     m_nextBatch = leaf.m_nextBatch;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 std::shared_ptr<BPNode<V>> CreateBPNode(const fs::path& dir, BPCache<V>& cache, FileIndex idx);
 
+//-------------------------------------------------------------------------------
 template<class V>
 DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, IndexManager& indexManager)
 {
@@ -364,12 +378,14 @@ DeleteResult<V> Leaf<V>::Delete(Key key, std::optional<Sibling> leftSibling, std
     throw std::runtime_error("Failed to remove unexisted value of key '" + std::to_string(key) + "'");
 }
 
+//-------------------------------------------------------------------------------
 template <class V>
 Key Leaf<V>::GetMinimum() const
 {
     return m_keys[0];
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 void Leaf<V>::Flush()
 {
@@ -399,6 +415,7 @@ void Leaf<V>::Flush()
     out.write(reinterpret_cast<char*>(&(nextBatch)), sizeof(nextBatch));
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 void Leaf<V>::Load()
 {

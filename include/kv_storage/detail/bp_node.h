@@ -9,6 +9,7 @@ namespace kv_storage {
 
 using Key = uint64_t;
 
+//-------------------------------------------------------------------------------
 constexpr uint32_t Half(uint32_t num)
 {
     if (num % 2 == 0)
@@ -17,16 +18,20 @@ constexpr uint32_t Half(uint32_t num)
         return (num - 1) / 2;
 }
 
+//-------------------------------------------------------------------------------
 constexpr size_t B = 150;
 constexpr size_t MaxKeys = B - 1;
 constexpr size_t MinKeys = Half(B);
 
+//-------------------------------------------------------------------------------
 template<class V>
 class BPNode;
 
+//-------------------------------------------------------------------------------
 template<class V>
 using BPCache = lru_cache<FileIndex, std::shared_ptr<BPNode<V>>>;
 
+//-------------------------------------------------------------------------------
 // ptr to new created BPNode & key to be inserted to parent node
 template<class V>
 struct CreatedBPNode
@@ -35,6 +40,7 @@ struct CreatedBPNode
     Key key;
 };
 
+//-------------------------------------------------------------------------------
 enum class DeleteType
 {
     Deleted,
@@ -44,6 +50,7 @@ enum class DeleteType
     MergedRight
 };
 
+//-------------------------------------------------------------------------------
 template<class V>
 struct DeleteResult
 {
@@ -52,12 +59,16 @@ struct DeleteResult
     std::shared_ptr<BPNode<V>> node;
 };
 
+//-------------------------------------------------------------------------------
 struct Sibling
 {
     Key key;
     FileIndex index;
 };
 
+//-------------------------------------------------------------------------------
+//                                BPNode
+//-------------------------------------------------------------------------------
 template<class V>
 class BPNode
 {
@@ -109,24 +120,28 @@ protected:
     bool m_dirty;
 };
 
+//-------------------------------------------------------------------------------
 template<class V>
 uint32_t BPNode<V>::GetKeyCount() const
 {
     return m_keyCount;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 Key BPNode<V>::GetLastKey() const
 {
     return m_keys[m_keyCount - 1];
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 FileIndex BPNode<V>::GetIndex() const
 {
     return m_index;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 void BPNode<V>::SetIndex(FileIndex index)
 {
@@ -134,6 +149,7 @@ void BPNode<V>::SetIndex(FileIndex index)
     m_dirty = true;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 void BPNode<V>::MarkAsDeleted()
 {

@@ -13,20 +13,7 @@ find_package(Boost COMPONENTS thread REQUIRED)
 include_directories(${Boost_INCLUDE_DIRS} include)
 link_directories(${Boost_LIBRARY_DIR})
 
-set (SOURCES
-    src/bp_node.h
-    src/node.h
-    src/node.cpp
-    src/leaf.cpp
-    src/leaf.h
-    src/utils.h
-    include/kv_storage/volume.h
-    include/kv_storage/storage.h
-)
-
 set (CMAKE_CXX_STANDARD 17)
 
-add_library(kv_storage STATIC ${SOURCES})
-target_link_libraries( kv_storage ${Boost_LIBRARIES} )
-
-add_subdirectory(test)
+add_executable(kv_storage_tests test/main.cpp)
+target_link_libraries( kv_storage_tests ${Boost_LIBRARIES} )

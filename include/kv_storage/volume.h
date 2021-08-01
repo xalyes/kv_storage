@@ -6,230 +6,16 @@
 #include <filesystem>
 #include <unordered_map>
 
-#include "../src/node.h"
+#include <kv_storage/detail/node.h>
+#include <kv_storage/detail/keys_deleter.h>
 
 namespace fs = std::filesystem;
 
 namespace kv_storage {
 
-const std::chrono::duration AutoDeletePeriod = std::chrono::seconds(1);
-
-template<class V>
-class Volume;
-
-template<class V>
-class OutdatedKeysDeleter
-{
-public:
-    OutdatedKeysDeleter(Volume<V>* volume, const fs::path& directory);
-    ~OutdatedKeysDeleter();
-    void Start();
-    void Put(Key key, uint32_t ttl);
-    void Delete(Key key);
-    void Flush();
-    void Load();
-
-private:
-    const fs::path m_dir;
-    std::unordered_map<Key, uint64_t> m_ttls;
-    std::thread m_worker;
-    std::atomic_bool m_stop{ false };
-    Volume<V>* m_volume;
-};
-
-template<class V>
-OutdatedKeysDeleter<V>::OutdatedKeysDeleter(Volume<V>* volume, const fs::path& directory)
-    : m_dir(directory)
-{
-    m_volume = volume;
-
-    if (fs::exists(m_dir / "keys_ttls.dat"))
-        Load();
-}
-
-template<class V>
-OutdatedKeysDeleter<V>::~OutdatedKeysDeleter()
-{
-    if (m_worker.joinable())
-    {
-        m_stop = true;
-        m_worker.join();
-    }
-
-    Flush();
-}
-
-template<class V>
-void OutdatedKeysDeleter<V>::Start()
-{
-    if (m_worker.joinable())
-        throw std::runtime_error("Worker thread already started");
-
-    m_worker = std::thread{ [&]()
-    {
-        try
-        {
-            while (!m_stop)
-            {
-                const std::chrono::time_point now = std::chrono::system_clock::now();
-                const std::chrono::system_clock::duration nowEpoch = now.time_since_epoch();
-                const uint64_t nowSeconds = nowEpoch.count() * std::chrono::system_clock::period::num / std::chrono::system_clock::period::den;
-
-                std::vector<Key> keysForDelete;
-
-                for (const auto& item : m_ttls)
-                {
-                    if (m_stop)
-                        break;
-
-                    if (nowSeconds >= item.second)
-                        keysForDelete.push_back(item.first);
-                }
-
-                for (const auto& key : keysForDelete)
-                {
-                    try
-                    {
-                        m_volume->Delete(key);
-                    }
-                    catch (const std::exception&)
-                    {
-                        // key not found
-                    }
-                    m_ttls.erase(key);
-                }
-
-                const auto elapsed = std::chrono::system_clock::now() - now;
-                if (elapsed < AutoDeletePeriod)
-                    std::this_thread::sleep_for(AutoDeletePeriod - elapsed);
-            }
-        }
-        catch (const std::exception&)
-        {
-            // Fatal error
-            return;
-        }
-    } };
-}
-
-template<class V>
-void OutdatedKeysDeleter<V>::Put(Key key, uint32_t ttl)
-{
-    std::chrono::system_clock::time_point tp = std::chrono::system_clock::now();
-    std::chrono::system_clock::duration dur = tp.time_since_epoch();
-
-    uint64_t seconds = dur.count() * std::chrono::system_clock::period::num / std::chrono::system_clock::period::den;
-    seconds += ttl;
-
-    m_ttls.insert({ key, seconds });
-}
-
-template<class V>
-void OutdatedKeysDeleter<V>::Delete(Key key)
-{
-    m_ttls.erase(key);
-}
-
-template<class V>
-void OutdatedKeysDeleter<V>::Flush()
-{
-    std::ofstream out;
-    out.exceptions(~std::ofstream::goodbit);
-    out.open(m_dir / "keys_ttls.dat", std::ios::out | std::ios::binary | std::ios::trunc);
-
-    uint32_t count = boost::endian::native_to_little(m_ttls.size());
-    out.write(reinterpret_cast<char*>(&count), sizeof(count));
-
-    for (const auto& ttl : m_ttls)
-    {
-        auto key = boost::endian::native_to_little(ttl.first);
-        out.write(reinterpret_cast<char*>(&key), sizeof(key));
-
-        auto time = boost::endian::native_to_little(ttl.second);
-        out.write(reinterpret_cast<char*>(&time), sizeof(time));
-    }
-}
-
-template<class V>
-void OutdatedKeysDeleter<V>::Load()
-{
-    std::ifstream in;
-    in.exceptions(~std::ofstream::goodbit);
-    in.open(m_dir / "keys_ttls.dat", std::ios::in | std::ios::binary);
-
-    uint32_t count;
-    in.read(reinterpret_cast<char*>(&(count)), sizeof(count));
-
-    boost::endian::little_to_native_inplace(count);
-
-    for (uint32_t i = 0; i < count; i++)
-    {
-        Key key;
-        uint64_t time;
-
-        in.read(reinterpret_cast<char*>(&(key)), sizeof(key));
-        in.read(reinterpret_cast<char*>(&(time)), sizeof(time));
-
-        boost::endian::little_to_native_inplace(key);
-        boost::endian::little_to_native_inplace(time);
-
-        m_ttls.insert({ key, time });
-    }
-}
-
-template<class V>
-class BPNode;
-
-template <class V>
-struct DeleteResult;
-
-struct Sibling;
-
-template<class V>
-std::shared_ptr<BPNode<V>> CreateEmptyBPNode(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
-{
-    auto leaf = std::make_shared<Leaf<V>>(dir, cache, idx);
-    cache.lock()->insert(idx, leaf);
-    return leaf;
-}
-
-template<class V>
-std::shared_ptr<BPNode<V>> CreateBPNode(const fs::path& dir, std::weak_ptr<BPCache<V>> cache, FileIndex idx)
-{
-    auto bpNode = cache.lock()->get(idx);
-    if (bpNode)
-        return *bpNode;
-
-    std::ifstream in;
-    in.exceptions(~std::ifstream::goodbit);
-    in.open(fs::path(dir) / ("batch_" + std::to_string(idx) + ".dat"), std::ios::in | std::ios::binary);
-
-    char type;
-    in.read(&type, 1);
-
-    // TODO: reuse ifstream instead of closing
-    if (type == '8')
-    {
-        in.close();
-        auto node = std::make_shared<Node<V>>(dir, cache, idx);
-        node->Load();
-        cache.lock()->insert(idx, node);
-        return node;
-    }
-    else if (type == '9')
-    {
-        in.close();
-        auto leaf = std::make_shared<Leaf<V>>(dir, cache, idx);
-        leaf->Load();
-        cache.lock()->insert(idx, leaf);
-        return leaf;
-    }
-    else
-    {
-        throw std::runtime_error("Invalid file format");
-    }
-}
-
+//-------------------------------------------------------------------------------
+//                            VolumeEnumerator
+//-------------------------------------------------------------------------------
 template <class V>
 class VolumeEnumerator
 {
@@ -248,6 +34,54 @@ private:
     boost::shared_lock<boost::shared_mutex> m_lock;
 };
 
+//-------------------------------------------------------------------------------
+template<class V>
+VolumeEnumerator<V>::VolumeEnumerator(const fs::path& directory, std::weak_ptr<BPCache<V>> cache, std::shared_ptr<BPNode<V>> firstBatch, boost::shared_lock<boost::shared_mutex>&& lock)
+    : m_dir(directory)
+    , m_cache(cache)
+    , m_currentBatch(std::static_pointer_cast<Leaf<V>>(firstBatch))
+    , m_lock(std::move(lock))
+{
+}
+
+//-------------------------------------------------------------------------------
+template<class V>
+bool VolumeEnumerator<V>::MoveNext()
+{
+    if (!m_isValid)
+        return false;
+
+    m_counter++;
+    if (m_counter == m_currentBatch->GetKeyCount())
+    {
+        if (!m_currentBatch->m_nextBatch)
+        {
+            m_isValid = false;
+            return false;
+        }
+
+        auto nextBatch = m_currentBatch->m_nextBatch;
+
+        m_currentBatch = std::static_pointer_cast<Leaf<V>>(CreateBPNode<V>(m_dir, m_cache, nextBatch));
+        m_counter = 0;
+        return true;
+    }
+    else
+    {
+        return true;
+    }
+}
+
+//-------------------------------------------------------------------------------
+template<class V>
+std::pair<Key, V> VolumeEnumerator<V>::GetCurrent()
+{
+    return { m_currentBatch->m_keys[m_counter], m_currentBatch->m_values[m_counter] };
+}
+
+//-------------------------------------------------------------------------------
+//                                   Volume
+//-------------------------------------------------------------------------------
 template <class V>
 class Volume
 {
@@ -276,6 +110,7 @@ private:
     mutable boost::shared_mutex m_mutex;
 };
 
+//-------------------------------------------------------------------------------
 template<class V>
 Volume<V>::Volume(Volume<V>&& other) noexcept
     : m_deleter(std::move(other.m_deleter))
@@ -286,6 +121,7 @@ Volume<V>::Volume(Volume<V>&& other) noexcept
     , m_indexManager(m_dir)
 {}
 
+//-------------------------------------------------------------------------------
 template<class V>
 Volume<V>& Volume<V>::operator= (Volume<V>&& other) noexcept
 {
@@ -297,12 +133,7 @@ Volume<V>& Volume<V>::operator= (Volume<V>&& other) noexcept
     m_indexManager = IndexManager(m_dir);
 }
 
-template<class V>
-std::pair<Key, V> VolumeEnumerator<V>::GetCurrent()
-{
-    return { m_currentBatch->m_keys[m_counter], m_currentBatch->m_values[m_counter] };
-}
-
+//-------------------------------------------------------------------------------
 template<class V>
 void Volume<V>::StartAutoDelete()
 {
@@ -310,6 +141,7 @@ void Volume<V>::StartAutoDelete()
     m_deleter->Start();
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 std::shared_ptr<BPNode<V>> Volume<V>::GetCustomNode(FileIndex idx) const
 {
@@ -319,6 +151,7 @@ std::shared_ptr<BPNode<V>> Volume<V>::GetCustomNode(FileIndex idx) const
     return CreateBPNode(m_dir, std::weak_ptr<BPCache<V>>(m_cache), idx);
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 void Volume<V>::Put(const Key& key, const V& value, std::optional<uint32_t> keyTtl /*= std::nullopt*/)
 {
@@ -411,6 +244,7 @@ void Volume<V>::Put(const Key& key, const V& value, std::optional<uint32_t> keyT
         m_deleter->Put(key, keyTtl.value());
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 std::optional<V> Volume<V>::Get(const Key& key) const
 {
@@ -440,42 +274,9 @@ std::optional<V> Volume<V>::Get(const Key& key) const
     return current->Get(key);
 }
 
-template<class V>
-VolumeEnumerator<V>::VolumeEnumerator(const fs::path& directory, std::weak_ptr<BPCache<V>> cache, std::shared_ptr<BPNode<V>> firstBatch, boost::shared_lock<boost::shared_mutex>&& lock)
-    : m_dir(directory)
-    , m_cache(cache)
-    , m_currentBatch(std::static_pointer_cast<Leaf<V>>(firstBatch))
-    , m_lock(std::move(lock))
-{
-}
+struct Sibling;
 
-template<class V>
-bool VolumeEnumerator<V>::MoveNext()
-{
-    if (!m_isValid)
-        return false;
-
-    m_counter++;
-    if (m_counter == m_currentBatch->GetKeyCount())
-    {
-        if (!m_currentBatch->m_nextBatch)
-        {
-            m_isValid = false;
-            return false;
-        }
-
-        auto nextBatch = m_currentBatch->m_nextBatch;
-
-        m_currentBatch = std::static_pointer_cast<Leaf<V>>(CreateBPNode<V>(m_dir, m_cache, nextBatch));
-        m_counter = 0;
-        return true;
-    }
-    else
-    {
-        return true;
-    }
-}
-
+//-------------------------------------------------------------------------------
 template<class V>
 void Volume<V>::Delete(const Key& key)
 {
@@ -601,6 +402,7 @@ void Volume<V>::Delete(const Key& key)
     return;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 Volume<V>::Volume(const fs::path& directory)
     : m_dir(directory)
@@ -620,6 +422,7 @@ Volume<V>::Volume(const fs::path& directory)
     m_nodesCount = 1;
 }
 
+//-------------------------------------------------------------------------------
 template<class V>
 std::unique_ptr<VolumeEnumerator<V>> Volume<V>::Enumerate() const
 {
