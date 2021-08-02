@@ -542,3 +542,50 @@ BOOST_AUTO_TEST_CASE(LoadTest, * boost::unit_test::disabled())
         std::cout << "Time elapsed for getting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
     }
 }
+
+BOOST_AUTO_TEST_CASE(Test700Gb, *boost::unit_test::disabled())
+{
+    std::cout << "Load test" << std::endl;
+
+    fs::path volumeDir("D:\\volume_700gb");
+    fs::remove_all(volumeDir);
+
+    std::vector<char> blobValue;
+    blobValue.reserve(14000);
+    for (int i = 0; i < 14000; i++)
+    {
+        blobValue.push_back('x');
+    }
+
+    const auto count = 50000000;
+
+    {
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+        {
+            auto s = kv_storage::Volume<std::vector<char>>(volumeDir, 2000);
+
+            for (int i = 0; i < count; i++)
+            {
+                s.Put(i, blobValue);
+            }
+        }
+
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        std::cout << "Time elapsed for inserting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+    }
+
+    {
+        std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+
+        auto s = kv_storage::Volume<std::vector<char>>(volumeDir, 2000);
+
+        for (int i = 0; i < count; i++)
+        {
+            BOOST_TEST(s.Get(i).has_value() == true);
+        }
+
+        std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+        std::cout << "Time elapsed for getting values: " << std::chrono::duration_cast<std::chrono::seconds>(end - begin).count() << "[s]" << std::endl;
+    }
+}

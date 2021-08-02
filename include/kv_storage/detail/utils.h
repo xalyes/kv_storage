@@ -19,6 +19,15 @@ namespace kv_storage {
 using FileIndex = uint64_t;
 
 //-------------------------------------------------------------------------------
+constexpr uint32_t Half(uint32_t num)
+{
+    if (num % 2 == 0)
+        return (num / 2) - 1;
+    else
+        return (num - 1) / 2;
+}
+
+//-------------------------------------------------------------------------------
 template<uint32_t N>
 void InsertToSortedArray(std::array<uint64_t, N>& arr, uint32_t count, uint64_t value)
 {

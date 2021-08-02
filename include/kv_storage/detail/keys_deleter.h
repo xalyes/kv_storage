@@ -41,7 +41,7 @@ private:
 
     std::thread m_worker;
     std::atomic_bool m_stop{ false };
-    Volume<V, BranchFactor>* m_volume;
+    Volume<V, BranchFactor>* const m_volume;
 };
 
 //-------------------------------------------------------------------------------
@@ -76,7 +76,6 @@ OutdatedKeysDeleter<V, BranchFactor>::~OutdatedKeysDeleter()
     }
     catch (...)
     {
-
     }
 }
 
@@ -116,11 +115,15 @@ void OutdatedKeysDeleter<V, BranchFactor>::Start()
                 {
                     try
                     {
-                        m_volume->Delete(key);
+                        if (m_volume)
+                            m_volume->Delete(key);
+                        else
+                            continue;
                     }
                     catch (const std::exception&)
                     {
                         // key not found
+                        continue;
                     }
 
                     boost::unique_lock<boost::shared_mutex> lock(m_mutex);
@@ -180,7 +183,7 @@ void OutdatedKeysDeleter<V, BranchFactor>::Flush()
     out.exceptions(~std::ofstream::goodbit);
     out.open(m_dir / "keys_ttls.dat", std::ios::out | std::ios::binary | std::ios::trunc);
 
-    uint32_t count = boost::endian::native_to_little(m_ttls.size());
+    uint32_t count = boost::endian::native_to_little(static_cast<uint32_t>(m_ttls.size()));
     out.write(reinterpret_cast<char*>(&count), sizeof(count));
 
     for (const auto& ttl : m_ttls)

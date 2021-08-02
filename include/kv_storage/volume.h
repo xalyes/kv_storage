@@ -13,6 +13,96 @@ namespace fs = std::filesystem;
 
 namespace kv_storage {
 
+template <class V, size_t BranchFactor>
+class VolumeEnumerator;
+
+//-------------------------------------------------------------------------------
+//                                   Volume
+//-------------------------------------------------------------------------------
+// Volume represents standard key-value map which is designed to store a huge
+// amount of data with support of multithreaded operations. Volume is
+// implemented as file-based B+ Tree with branch factor which can be configured
+// as template parameter 'BranchFactor'.
+// Supported types of values is std::string, std::vector<char>, float,
+// double, uint32_t, uint64_t. Keys is uint64_t.
+// 
+// Volume is stored in a single directory with files named as "batch_%d.dat".
+// One batch may be a leaf node with real data or an internal node with pointers
+// to another files. "batch_1.dat" is always root. Byte order in batches is always
+// little endian.
+// 
+// Node file format:
+//  0x38                         - Node marker.
+//  0xXX 0xXX 0xXX 0xXX          - Key count in node.
+//  (BranchFactor - 1) * 8 bytes - Keys. First key count is real keys and remainder is zeros.
+//  BranchFactor * 8 byes        - Pointers to another nodes represented as 8 byte
+//                                 unsigned numbers which is a number in filename of batch.
+//                                 Amount of pointers is always one more than a keys. 
+//                                 Remainder is zeros.
+//  
+// Leaf file format:
+//  0x39                         - Leaf marker.
+//  0xXX 0xXX 0xXX 0xXX          - Key count in leaf.
+//  (BranchFactor - 1) * 8 bytes - Keys. First key count is real keys and remainder is zeros.
+//  Key count of %Values%        - Details below.
+//  0xXX 0xXX 0xXX 0xXX 0xXX 0xXX 0xXX 0xXX - File index of the next leaf.
+// 
+// %Values% - Fixed size values (float, double, uints) is simple placed one by one.
+// strings and vector<char> placed as sequence of pairs <uint32_t, %data%>. First
+// number is size of next data.
+// 
+// Special file with name 'keys_ttls.dat' which keeps keys with limited time to live:
+//  0xXX 0xXX 0xXX 0xXX                     - Key count
+//  Key count of pairs <uint64_t, uint64_t> - Key -> unix time for deletion
+//-------------------------------------------------------------------------------
+template <class V, size_t BranchFactor = 150>
+class Volume
+{
+public:
+    // directory - Input parameter. Directory for Volume.
+    // cacheSize - Input parameter. How many nodes LRU cache keeps before begin to flush nodes to disk.
+    Volume(const fs::path& directory, size_t cacheSize = 200000);
+
+    Volume(Volume&&);
+    Volume& operator= (Volume&&);
+
+    // key - Input parameter. Key to insert.
+    // value - Input parameter. Value to insert.
+    // keyTtl - Optional input parameter. How many seconds volume should keep key before delete.
+    void Put(const Key& key, const V& value, std::optional<uint32_t> keyTtl = std::nullopt);
+
+    // key - Input parameter. Key to find.
+    // Return parameter is std::optional with found value or without it.
+    std::optional<V> Get(const Key& key) const;
+
+    // key - Input parameter. Key to delete.
+    void Delete(const Key& key);
+
+    // Special method for get subtree by index number.
+    std::shared_ptr<BPNode<V, BranchFactor>> GetCustomNode(FileIndex idx) const;
+
+    // Create enumerator through all leaves. Automatically locks tree mutex in shared mode and 
+    // unlocks in destructor of VolumeEnumerator.
+    // Complexity is O(N).
+    std::unique_ptr<VolumeEnumerator<V, BranchFactor>> Enumerate() const;
+
+    // Start auto delete thread.
+    void StartAutoDelete();
+
+    // Stop thread and flush all changes on disk. Throws on errors.
+    void StopAndFlush();
+
+    ~Volume();
+
+private:
+    std::unique_ptr<OutdatedKeysDeleter<V, BranchFactor>> m_deleter;
+    std::shared_ptr<BPNode<V, BranchFactor>> m_root;
+    const fs::path m_dir;
+    mutable std::shared_ptr<BPCache<V, BranchFactor>> m_cache;
+    IndexManager m_indexManager;
+    mutable boost::shared_mutex m_mutex;
+};
+
 //-------------------------------------------------------------------------------
 //                            VolumeEnumerator
 //-------------------------------------------------------------------------------
@@ -21,9 +111,9 @@ class VolumeEnumerator
 {
 public:
     VolumeEnumerator(const fs::path& directory, std::weak_ptr<BPCache<V, BranchFactor>> cache, std::shared_ptr<BPNode<V, BranchFactor>> firstBatch, boost::shared_lock<boost::shared_mutex>&& lock);
-    virtual bool MoveNext();
-    virtual std::pair<Key, V> GetCurrent();
-    virtual ~VolumeEnumerator() = default;
+    bool MoveNext();
+    std::pair<Key, V> GetCurrent() const;
+    ~VolumeEnumerator() = default;
 
 private:
     std::shared_ptr<Leaf<V, BranchFactor>> m_currentBatch;
@@ -74,45 +164,14 @@ bool VolumeEnumerator<V, BranchFactor>::MoveNext()
 
 //-------------------------------------------------------------------------------
 template<class V, size_t BranchFactor>
-std::pair<Key, V> VolumeEnumerator<V, BranchFactor>::GetCurrent()
+std::pair<Key, V> VolumeEnumerator<V, BranchFactor>::GetCurrent() const
 {
     return { m_currentBatch->m_keys[m_counter], m_currentBatch->m_values[m_counter] };
 }
 
 //-------------------------------------------------------------------------------
-//                                   Volume
-//-------------------------------------------------------------------------------
-template <class V, size_t BranchFactor = 150>
-class Volume
-{
-public:
-    Volume(const fs::path& directory, size_t cacheSize = 200000);
-
-    Volume(Volume&&) noexcept;
-    Volume& operator= (Volume&&) noexcept;
-
-    void Put(const Key& key, const V& value, std::optional<uint32_t> keyTtl = std::nullopt);
-    std::optional<V> Get(const Key& key) const;
-    void Delete(const Key& key);
-    std::shared_ptr<BPNode<V, BranchFactor>> GetCustomNode(FileIndex idx) const;
-    std::unique_ptr<VolumeEnumerator<V, BranchFactor>> Enumerate() const;
-    void StopAndFlush();
-    ~Volume();
-
-    void StartAutoDelete();
-
-private:
-    std::unique_ptr<OutdatedKeysDeleter<V, BranchFactor>> m_deleter;
-    std::shared_ptr<BPNode<V, BranchFactor>> m_root;
-    const fs::path m_dir;
-    mutable std::shared_ptr<BPCache<V, BranchFactor>> m_cache;
-    IndexManager m_indexManager;
-    mutable boost::shared_mutex m_mutex;
-};
-
-//-------------------------------------------------------------------------------
 template<class V, size_t BranchFactor>
-Volume<V, BranchFactor>::Volume(Volume<V, BranchFactor>&& other) noexcept
+Volume<V, BranchFactor>::Volume(Volume<V, BranchFactor>&& other)
     : m_deleter(std::move(other.m_deleter))
     , m_root(std::move(other.m_root))
     , m_dir(std::move(other.m_dir))
@@ -122,7 +181,7 @@ Volume<V, BranchFactor>::Volume(Volume<V, BranchFactor>&& other) noexcept
 
 //-------------------------------------------------------------------------------
 template<class V, size_t BranchFactor>
-Volume<V, BranchFactor>& Volume<V, BranchFactor>::operator= (Volume<V, BranchFactor>&& other) noexcept
+Volume<V, BranchFactor>& Volume<V, BranchFactor>::operator= (Volume<V, BranchFactor>&& other)
 {
     m_deleter = std::move(m_deleter);
     m_root = std::move(other.m_root);
@@ -135,10 +194,17 @@ Volume<V, BranchFactor>& Volume<V, BranchFactor>::operator= (Volume<V, BranchFac
 template<class V, size_t BranchFactor>
 void Volume<V, BranchFactor>::StopAndFlush()
 {
-    m_deleter->Stop();
-    m_deleter->Flush();
-    m_root->Flush();
-    m_cache->clear();
+    if (m_deleter)
+    {
+        m_deleter->Stop();
+        m_deleter->Flush();
+    }
+    
+    if (m_root)
+        m_root->Flush();
+
+    if (m_cache)
+        m_cache->clear();
 }
 
 //-------------------------------------------------------------------------------
@@ -296,8 +362,6 @@ std::optional<V> Volume<V, BranchFactor>::Get(const Key& key) const
 
     return current->Get(key);
 }
-
-struct Sibling;
 
 //-------------------------------------------------------------------------------
 template<class V, size_t BranchFactor>

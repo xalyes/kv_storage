@@ -10,15 +10,6 @@ namespace kv_storage {
 using Key = uint64_t;
 
 //-------------------------------------------------------------------------------
-constexpr uint32_t Half(uint32_t num)
-{
-    if (num % 2 == 0)
-        return (num / 2) - 1;
-    else
-        return (num - 1) / 2;
-}
-
-//-------------------------------------------------------------------------------
 template<class V, size_t BranchFactor>
 class BPNode;
 

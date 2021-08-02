@@ -32,15 +32,15 @@ public:
     {}
 
     virtual ~Leaf();
-
     virtual void Flush() override;
     virtual void Load() override;
-    virtual std::optional<CreatedBPNode<V, BranchFactor>> Put(Key key, const V& val, IndexManager& indexManager);
     virtual std::optional<V> Get(Key key) const override;
-    virtual DeleteResult<V, BranchFactor> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, IndexManager& indexManager);
     virtual Key GetMinimum() const override;
     virtual std::shared_ptr<BPNode<V, BranchFactor>> GetFirstLeaf() override;
     virtual bool IsLeaf() const override;
+
+    DeleteResult<V, BranchFactor> Delete(Key key, std::optional<Sibling> leftSibling, std::optional<Sibling> rightSibling, IndexManager& indexManager);
+    std::optional<CreatedBPNode<V, BranchFactor>> Put(Key key, const V& val, IndexManager& indexManager);
 
 private:
     CreatedBPNode<V, BranchFactor> SplitAndPut(Key key, const V& value, IndexManager& indexManager);
@@ -68,8 +68,7 @@ private:
 
     template<class V, size_t BranchFactor>
     typename std::enable_if<
-        std::is_same<V, std::string>::value
-     || std::is_same<V, std::vector<char>>::value, void>::type
+        std::is_same<V, std::string>::value, void>::type
         ReadValues(std::ifstream& in)
     {
         for (uint32_t i = 0; i < m_keyCount; i++)
@@ -82,6 +81,23 @@ private:
             in.read(buf.get(), size);
             buf.get()[size] = '\0';
             m_values.emplace_back(buf.get());
+        }
+    }
+
+    template<class V, size_t BranchFactor>
+    typename std::enable_if<
+        std::is_same<V, std::vector<char>>::value, void>::type
+        ReadValues(std::ifstream& in)
+    {
+        for (uint32_t i = 0; i < m_keyCount; i++)
+        {
+            uint32_t size;
+            in.read(reinterpret_cast<char*>(&size), sizeof(size));
+            boost::endian::little_to_native_inplace(size);
+
+            auto buf = std::make_unique<char[]>(size);
+            in.read(buf.get(), size);
+            m_values.emplace_back(buf.get(), buf.get() + size);
         }
     }
 
@@ -108,7 +124,7 @@ private:
     {
         for (uint32_t i = 0; i < m_keyCount; i++)
         {
-            uint32_t size = boost::endian::native_to_little(m_values[i].size());
+            uint32_t size = boost::endian::native_to_little(static_cast<uint32_t>(m_values[i].size()));
             out.write(reinterpret_cast<char*>(&size), sizeof(size));
             out.write(m_values[i].data(), m_values[i].size());
         }
@@ -177,7 +193,7 @@ std::optional<CreatedBPNode<V, BranchFactor>> Leaf<V, BranchFactor>::Put(Key key
     }
     else
     {
-        for (size_t i = 0; i < m_keyCount; i++)
+        for (uint32_t i = 0; i < m_keyCount; i++)
         {
             auto currentKey = m_keys[i];
 
@@ -220,7 +236,7 @@ CreatedBPNode<V, BranchFactor> Leaf<V, BranchFactor>::SplitAndPut(Key key, const
 
     std::vector<V> newValues;
 
-    uint32_t borderIndex = m_values.size() - copyCount;
+    uint32_t borderIndex = static_cast<uint32_t>(m_values.size()) - copyCount;
 
     newValues.insert(newValues.end(), std::make_move_iterator(m_values.begin() + borderIndex),
         std::make_move_iterator(m_values.end()));
