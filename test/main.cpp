@@ -456,7 +456,7 @@ BOOST_AUTO_TEST_CASE(AutoDeleteTest)
 
     {
         auto s = kv_storage::Volume<std::string>(volumeDir);
-        s.StartAutoDelete();
+        s.Start();
 
         s.Put(1, "val1", 1);
         s.Put(2, "val2", 1);
@@ -472,7 +472,7 @@ BOOST_AUTO_TEST_CASE(AutoDeleteTest)
     }
 
     auto s = kv_storage::Volume<std::string>(volumeDir);
-    s.StartAutoDelete();
+    s.Start();
 
     std::this_thread::sleep_for(std::chrono::seconds(2));
     BOOST_TEST(s.Get(1).has_value() == false);
@@ -543,9 +543,16 @@ BOOST_AUTO_TEST_CASE(LoadTest, * boost::unit_test::disabled())
     }
 }
 
+// Test for writing 700GB tree.
+// My run (HDD, 150 branch factor, 2000 cache size, x64 build on windows 10) gives follows:
+// - 675 553 files in volume
+// - ~760GB
+// - 13722 seconds elapsed for inserting overall
+// - 23198 seconds elapsed for getting values
+// - ~2.2 GB RAM usage
 BOOST_AUTO_TEST_CASE(Test700Gb, *boost::unit_test::disabled())
 {
-    std::cout << "Load test" << std::endl;
+    std::cout << "Test700gb test" << std::endl;
 
     fs::path volumeDir("D:\\volume_700gb");
     fs::remove_all(volumeDir);

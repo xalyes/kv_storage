@@ -87,9 +87,9 @@ public:
     std::unique_ptr<VolumeEnumerator<V, BranchFactor>> Enumerate() const;
 
     // Start auto delete thread.
-    void StartAutoDelete();
+    void Start();
 
-    // Stop thread and flush all changes on disk. Throws on errors.
+    // Stop thread and flush all changes on disk. Throws on error.
     void StopAndFlush();
 
     ~Volume();
@@ -106,13 +106,27 @@ private:
 //-------------------------------------------------------------------------------
 //                            VolumeEnumerator
 //-------------------------------------------------------------------------------
+// Object to enumerate key value pairs. It holds shared lock of volume, so delete
+// and write operations will be blocked until VolumeEnumerator is exists.
+// After creation enumerator points to unexisted pair, so to get first key-value
+// client should call MoveNext() before.
+//-------------------------------------------------------------------------------
 template <class V, size_t BranchFactor>
 class VolumeEnumerator
 {
 public:
+    // directory  - Input parameter. Volume directory.
+    // cache      - Input parameter. Batches cache.
+    // firstBatch - Input parameter. First leaf with values.
+    // lock       - Input rvalue parameter. Shared lock that already holds volume mutex.
     VolumeEnumerator(const fs::path& directory, std::weak_ptr<BPCache<V, BranchFactor>> cache, std::shared_ptr<BPNode<V, BranchFactor>> firstBatch, boost::shared_lock<boost::shared_mutex>&& lock);
+
+    // MoveNext moves pointer to the next key value pair. If it exists return true, false otherwise.
     bool MoveNext();
+
+    // Return current key value pair.
     std::pair<Key, V> GetCurrent() const;
+
     ~VolumeEnumerator() = default;
 
 private:
@@ -222,7 +236,7 @@ Volume<V, BranchFactor>::~Volume()
 
 //-------------------------------------------------------------------------------
 template<class V, size_t BranchFactor>
-void Volume<V, BranchFactor>::StartAutoDelete()
+void Volume<V, BranchFactor>::Start()
 {
     m_deleter = std::make_unique<OutdatedKeysDeleter<V, BranchFactor>>(this, m_dir);
     m_deleter->Start();
