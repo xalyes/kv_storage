@@ -6,8 +6,10 @@ set (Boost_USE_STATIC_LIBS ON)
 set (Boost_USE_MULTITHREADED ON)
 set (Boost_USE_STATIC_RUNTIME OFF)
 
-set (Boost_INCLUDE_DIR "C:\\boost_1_76_0")
-set (Boost_LIBRARY_DIR "C:\\boost_1_76_0\\stage\\lib")
+if (WIN32)
+    set (Boost_INCLUDE_DIR "C:\\boost_1_76_0")
+    set (Boost_LIBRARY_DIR "C:\\boost_1_76_0\\stage\\lib")
+endif ()
 
 find_package(Boost COMPONENTS thread REQUIRED)
 include_directories(${Boost_INCLUDE_DIRS} include)

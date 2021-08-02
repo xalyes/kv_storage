@@ -18,10 +18,10 @@ class Leaf
     , public std::enable_shared_from_this<BPNode<V, BranchFactor>>
 {
 public:
-    template<class V, size_t BranchFactor> friend class VolumeEnumerator;
+    template<class, size_t> friend class VolumeEnumerator;
 
     Leaf(const fs::path& dir, std::weak_ptr<BPCache<V, BranchFactor>> cache, FileIndex idx)
-        : BPNode(dir, cache, idx)
+        : BPNode<V, BranchFactor>(dir, cache, idx)
     {
     }
 
@@ -48,15 +48,24 @@ private:
     void RightJoin(const Leaf<V, BranchFactor>& leaf);
     void Insert(Key key, const V& value, uint32_t pos);
 
-    template<class V, size_t BranchFactor>
+    using std::enable_shared_from_this<BPNode<V, BranchFactor>>::shared_from_this;
+    using BPNode<V, BranchFactor>::m_keyCount;
+    using BPNode<V, BranchFactor>::m_keys;
+    using BPNode<V, BranchFactor>::m_dirty;
+    using BPNode<V, BranchFactor>::m_index;
+    using BPNode<V, BranchFactor>::m_dir;
+    using BPNode<V, BranchFactor>::m_cache;
+    using BPNode<V, BranchFactor>::m_mutex;
+
+    template<class T>
     typename std::enable_if<
-        std::is_same<V, float>::value
-     || std::is_same<V, uint32_t>::value
-     || std::is_same<V, uint64_t>::value
-     || std::is_same<V, double>::value, void>::type
+        std::is_same<T, float>::value
+     || std::is_same<T, uint32_t>::value
+     || std::is_same<T, uint64_t>::value
+     || std::is_same<T, double>::value, void>::type
         ReadValues(std::ifstream& in)
     {
-        uint32_t sz = static_cast<uint32_t>(sizeof(V)) * m_keyCount;
+        uint32_t sz = static_cast<uint32_t>(sizeof(T)) * m_keyCount;
         m_values.resize(sz);
         in.read(reinterpret_cast<char*>(m_values.data()), sz);
 
@@ -66,9 +75,9 @@ private:
         }
     }
 
-    template<class V, size_t BranchFactor>
+    template<class T>
     typename std::enable_if<
-        std::is_same<V, std::string>::value, void>::type
+        std::is_same<T, std::string>::value, void>::type
         ReadValues(std::ifstream& in)
     {
         for (uint32_t i = 0; i < m_keyCount; i++)
@@ -84,9 +93,9 @@ private:
         }
     }
 
-    template<class V, size_t BranchFactor>
+    template<class T>
     typename std::enable_if<
-        std::is_same<V, std::vector<char>>::value, void>::type
+        std::is_same<T, std::vector<char>>::value, void>::type
         ReadValues(std::ifstream& in)
     {
         for (uint32_t i = 0; i < m_keyCount; i++)
@@ -101,12 +110,12 @@ private:
         }
     }
 
-    template<class V, size_t BranchFactor>
+    template<class T>
     typename std::enable_if<
-        std::is_same<V, float>::value
-     || std::is_same<V, uint32_t>::value
-     || std::is_same<V, uint64_t>::value
-     || std::is_same<V, double>::value, void>::type
+        std::is_same<T, float>::value
+     || std::is_same<T, uint32_t>::value
+     || std::is_same<T, uint64_t>::value
+     || std::is_same<T, double>::value, void>::type
         WriteValues(std::ofstream& out)
     {
         for (uint32_t i = 0; i < m_values.size(); i++)
@@ -116,10 +125,10 @@ private:
         }
     }
 
-    template<class V, size_t BranchFactor>
+    template<class T>
     typename std::enable_if<
-        std::is_same<V, std::string>::value
-     || std::is_same<V, std::vector<char>>::value, void>::type
+        std::is_same<T, std::string>::value
+     || std::is_same<T, std::vector<char>>::value, void>::type
         WriteValues(std::ofstream& out)
     {
         for (uint32_t i = 0; i < m_keyCount; i++)
@@ -434,7 +443,7 @@ void Leaf<V, BranchFactor>::Flush()
         out.write(reinterpret_cast<char*>(&key), sizeof(key));
     }
 
-    WriteValues<V, BranchFactor>(out);
+    WriteValues<V>(out);
 
     auto nextBatch = boost::endian::native_to_little(m_nextBatch);
     out.write(reinterpret_cast<char*>(&(nextBatch)), sizeof(nextBatch));
@@ -465,7 +474,7 @@ void Leaf<V, BranchFactor>::Load()
         boost::endian::little_to_native_inplace(m_keys[i]);
     }
 
-    ReadValues<V, BranchFactor>(in);
+    ReadValues<V>(in);
 
     in.read(reinterpret_cast<char*>(&(m_nextBatch)), sizeof(m_nextBatch));
     boost::endian::little_to_native_inplace(m_nextBatch);

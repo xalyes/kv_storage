@@ -28,23 +28,6 @@ constexpr uint32_t Half(uint32_t num)
 }
 
 //-------------------------------------------------------------------------------
-template<uint32_t N>
-void InsertToSortedArray(std::array<uint64_t, N>& arr, uint32_t count, uint64_t value)
-{
-    // TODO: binary search may be?
-    for (uint32_t i = 0; i < count; i++)
-    {
-        if (value < arr[i])
-        {
-            InsertToArray(arr, i, value);
-            return;
-        }
-    }
-
-    InsertToArray(arr, count, value);
-}
-
-//-------------------------------------------------------------------------------
 template<size_t N>
 void InsertToArray(std::array<uint64_t, N>& arr, size_t pos, uint64_t val)
 {
@@ -59,6 +42,23 @@ void InsertToArray(std::array<uint64_t, N>& arr, size_t pos, uint64_t val)
         }
     }
     arr[pos] = val;
+}
+
+//-------------------------------------------------------------------------------
+template<uint32_t N>
+void InsertToSortedArray(std::array<uint64_t, N>& arr, uint32_t count, uint64_t value)
+{
+    // TODO: binary search may be?
+    for (uint32_t i = 0; i < count; i++)
+    {
+        if (value < arr[i])
+        {
+            InsertToArray(arr, i, value);
+            return;
+        }
+    }
+
+    InsertToArray(arr, count, value);
 }
 
 //-------------------------------------------------------------------------------

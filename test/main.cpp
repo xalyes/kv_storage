@@ -506,7 +506,7 @@ BOOST_AUTO_TEST_CASE(LoadTest, * boost::unit_test::disabled())
 {
     std::cout << "Load test" << std::endl;
 
-    fs::path volumeDir("D:\\volume");
+    fs::path volumeDir("volume_200M");
     fs::remove_all(volumeDir);
 
     const auto count = 200000000;
@@ -554,7 +554,7 @@ BOOST_AUTO_TEST_CASE(Test700Gb, *boost::unit_test::disabled())
 {
     std::cout << "Test700gb test" << std::endl;
 
-    fs::path volumeDir("D:\\volume_700gb");
+    fs::path volumeDir("volume_700gb");
     fs::remove_all(volumeDir);
 
     std::vector<char> blobValue;

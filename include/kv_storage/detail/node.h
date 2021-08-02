@@ -17,7 +17,7 @@ class Node : public BPNode<V, BranchFactor>, public std::enable_shared_from_this
 {
 public:
     Node(const fs::path& dir, std::weak_ptr<BPCache<V, BranchFactor>> cache, FileIndex idx)
-        : BPNode(dir, cache, idx)
+        : BPNode<V, BranchFactor>(dir, cache, idx)
     {
         m_ptrs.fill(0);
     }
@@ -43,6 +43,15 @@ public:
 
 private:
     uint32_t FindKeyPosition(Key key) const;
+
+    using std::enable_shared_from_this<BPNode<V, BranchFactor>>::shared_from_this;
+    using BPNode<V, BranchFactor>::m_keyCount;
+    using BPNode<V, BranchFactor>::m_keys;
+    using BPNode<V, BranchFactor>::m_dirty;
+    using BPNode<V, BranchFactor>::m_index;
+    using BPNode<V, BranchFactor>::m_dir;
+    using BPNode<V, BranchFactor>::m_cache;
+    using BPNode<V, BranchFactor>::m_mutex;
 
     std::array<FileIndex, BranchFactor> m_ptrs;
 };
@@ -404,9 +413,9 @@ DeleteResult<V, BranchFactor> Node<V, BranchFactor>::Delete(Key key, std::option
     if (leftSiblingNode)
     {
         if (leftSibling->key != key)
-            InsertToSortedArray(m_keys, m_keyCount, leftSibling->key);
+            InsertToSortedArray<MaxKeys>(m_keys, m_keyCount, leftSibling->key);
         else
-            InsertToSortedArray(m_keys, m_keyCount, *deleteResult.key);
+            InsertToSortedArray<MaxKeys>(m_keys, m_keyCount, *deleteResult.key);
         m_keyCount++;
 
         std::array<Key, MaxKeys> newKeys = leftSiblingNode->m_keys;
@@ -433,9 +442,9 @@ DeleteResult<V, BranchFactor> Node<V, BranchFactor>::Delete(Key key, std::option
     else if (rightSiblingNode)
     {
         if (rightSibling->key != key)
-            InsertToSortedArray(m_keys, m_keyCount, rightSibling->key);
+            InsertToSortedArray<MaxKeys>(m_keys, m_keyCount, rightSibling->key);
         else
-            InsertToSortedArray(m_keys, m_keyCount, *deleteResult.key);
+            InsertToSortedArray<MaxKeys>(m_keys, m_keyCount, *deleteResult.key);
         m_keyCount++;
 
         for (uint32_t i = m_keyCount; i <= m_keyCount + rightSiblingNode->m_keyCount - 1; i++)

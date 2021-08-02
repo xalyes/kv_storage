@@ -59,7 +59,7 @@ template<class V, size_t BranchFactor>
 class BPNode
 {
 public:
-    template<class V, size_t BranchFactor> friend class VolumeEnumerator;
+    template<class, size_t> friend class VolumeEnumerator;
 
     BPNode(const fs::path& dir, std::weak_ptr<BPCache<V, BranchFactor>> cache, FileIndex idx)
         : m_dir(dir)
