@@ -156,7 +156,7 @@ void OutdatedKeysDeleter<V, BranchFactor>::Put(Key key, uint32_t ttl)
 
     boost::unique_lock<boost::shared_mutex> lock(m_mutex);
 
-    m_ttls.insert({ key, seconds });
+    m_ttls.emplace(key, seconds);
     m_dirty = true;
 }
 
@@ -228,7 +228,7 @@ void OutdatedKeysDeleter<V, BranchFactor>::Load()
         boost::endian::little_to_native_inplace(key);
         boost::endian::little_to_native_inplace(time);
 
-        m_ttls.insert({ key, time });
+        m_ttls.emplace(key, time);
     }
 
     m_dirty = false;

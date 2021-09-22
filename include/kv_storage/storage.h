@@ -74,7 +74,7 @@ void StorageNode<V, BranchFactor>::EraseNode(size_t idx)
 template<class V, size_t BranchFactor>
 void StorageNode<V, BranchFactor>::Mount(const Volume<V>& vol, size_t priority, FileIndex idx)
 {
-    m_volumeNodes.insert({ priority, vol.GetCustomNode(idx) });
+    m_volumeNodes.emplace(priority, vol.GetCustomNode(idx));
 }
 
 //-------------------------------------------------------------------------------

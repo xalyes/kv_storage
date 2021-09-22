@@ -57,85 +57,74 @@ private:
     using BPNode<V, BranchFactor>::m_cache;
     using BPNode<V, BranchFactor>::m_mutex;
 
-    template<class T>
-    typename std::enable_if<
-        std::is_same<T, float>::value
-     || std::is_same<T, uint32_t>::value
-     || std::is_same<T, uint64_t>::value
-     || std::is_same<T, double>::value, void>::type
-        ReadValues(std::ifstream& in)
+    void ReadValues(std::ifstream& in)
     {
-        uint32_t sz = static_cast<uint32_t>(sizeof(T)) * m_keyCount;
-        m_values.resize(sz);
-        in.read(reinterpret_cast<char*>(m_values.data()), sz);
-
-        for (uint32_t i = 0; i < m_keyCount; i++)
+        if constexpr (std::is_same_v<V, std::string>)
         {
-            LittleToNativeEndianInplace(m_values[i]);
+            for (uint32_t i = 0; i < m_keyCount; i++)
+            {
+                uint32_t size;
+                in.read(reinterpret_cast<char*>(&size), sizeof(size));
+                boost::endian::little_to_native_inplace(size);
+
+                auto buf = std::make_unique<char[]>(size + 1);
+                in.read(buf.get(), size);
+                buf.get()[size] = '\0';
+                m_values.emplace_back(buf.get());
+            }
+        }
+        else if constexpr (std::is_same_v<V, std::vector<char>>)
+        {
+            for (uint32_t i = 0; i < m_keyCount; i++)
+            {
+                uint32_t size;
+                in.read(reinterpret_cast<char*>(&size), sizeof(size));
+                boost::endian::little_to_native_inplace(size);
+
+                auto buf = std::make_unique<char[]>(size);
+                in.read(buf.get(), size);
+                m_values.emplace_back(buf.get(), buf.get() + size);
+            }
+        }
+        else if constexpr (std::is_same_v<V, float> || std::is_same_v<V, double> || std::is_same_v<V, uint32_t> || std::is_same_v<V, uint64_t>)
+        {
+            uint32_t sz = static_cast<uint32_t>(sizeof(V)) * m_keyCount;
+            m_values.resize(sz);
+            in.read(reinterpret_cast<char*>(m_values.data()), sz);
+
+            for (uint32_t i = 0; i < m_keyCount; i++)
+            {
+                LittleToNativeEndianInplace(m_values[i]);
+            }
+        }
+        else
+        {
+            static_assert(false, "Type must be string, blob, float, double or uint");
         }
     }
 
-    template<class T>
-    typename std::enable_if<
-        std::is_same<T, std::string>::value, void>::type
-        ReadValues(std::ifstream& in)
+    void WriteValues(std::ofstream& out)
     {
-        for (uint32_t i = 0; i < m_keyCount; i++)
+        if constexpr (std::is_same_v<V, std::string> || std::is_same_v<V , std::vector<char>>)
         {
-            uint32_t size;
-            in.read(reinterpret_cast<char*>(&size), sizeof(size));
-            boost::endian::little_to_native_inplace(size);
-
-            auto buf = std::make_unique<char[]>(size + 1);
-            in.read(buf.get(), size);
-            buf.get()[size] = '\0';
-            m_values.emplace_back(buf.get());
+            for (uint32_t i = 0; i < m_keyCount; i++)
+            {
+                uint32_t size = boost::endian::native_to_little(static_cast<uint32_t>(m_values[i].size()));
+                out.write(reinterpret_cast<char*>(&size), sizeof(size));
+                out.write(m_values[i].data(), m_values[i].size());
+            }
         }
-    }
-
-    template<class T>
-    typename std::enable_if<
-        std::is_same<T, std::vector<char>>::value, void>::type
-        ReadValues(std::ifstream& in)
-    {
-        for (uint32_t i = 0; i < m_keyCount; i++)
+        else if constexpr (std::is_same_v<V, float> || std::is_same_v<V, double> || std::is_same_v<V, uint32_t> || std::is_same_v<V, uint64_t>)
         {
-            uint32_t size;
-            in.read(reinterpret_cast<char*>(&size), sizeof(size));
-            boost::endian::little_to_native_inplace(size);
-
-            auto buf = std::make_unique<char[]>(size);
-            in.read(buf.get(), size);
-            m_values.emplace_back(buf.get(), buf.get() + size);
+            for (uint32_t i = 0; i < m_values.size(); i++)
+            {
+                auto val = NativeToLittleEndian(m_values[i]);
+                out.write(reinterpret_cast<char*>(&val), sizeof(val));
+            }
         }
-    }
-
-    template<class T>
-    typename std::enable_if<
-        std::is_same<T, float>::value
-     || std::is_same<T, uint32_t>::value
-     || std::is_same<T, uint64_t>::value
-     || std::is_same<T, double>::value, void>::type
-        WriteValues(std::ofstream& out)
-    {
-        for (uint32_t i = 0; i < m_values.size(); i++)
+        else
         {
-            auto val = NativeToLittleEndian(m_values[i]);
-            out.write(reinterpret_cast<char*>(&val), sizeof(val));
-        }
-    }
-
-    template<class T>
-    typename std::enable_if<
-        std::is_same<T, std::string>::value
-     || std::is_same<T, std::vector<char>>::value, void>::type
-        WriteValues(std::ofstream& out)
-    {
-        for (uint32_t i = 0; i < m_keyCount; i++)
-        {
-            uint32_t size = boost::endian::native_to_little(static_cast<uint32_t>(m_values[i].size()));
-            out.write(reinterpret_cast<char*>(&size), sizeof(size));
-            out.write(m_values[i].data(), m_values[i].size());
+            static_assert(false, "Type must be string, blob, float, double or uint");
         }
     }
 
@@ -443,7 +432,7 @@ void Leaf<V, BranchFactor>::Flush()
         out.write(reinterpret_cast<char*>(&key), sizeof(key));
     }
 
-    WriteValues<V>(out);
+    WriteValues(out);
 
     auto nextBatch = boost::endian::native_to_little(m_nextBatch);
     out.write(reinterpret_cast<char*>(&(nextBatch)), sizeof(nextBatch));
@@ -474,7 +463,7 @@ void Leaf<V, BranchFactor>::Load()
         boost::endian::little_to_native_inplace(m_keys[i]);
     }
 
-    ReadValues<V>(in);
+    ReadValues(in);
 
     in.read(reinterpret_cast<char*>(&(m_nextBatch)), sizeof(m_nextBatch));
     boost::endian::little_to_native_inplace(m_nextBatch);

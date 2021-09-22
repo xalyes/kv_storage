@@ -141,9 +141,9 @@ void LittleToNativeEndianInplace(T& val)
     {
         char* pVal = (char*)&val;
         int size = sizeof(T);
-        for (int i = 0; i < size; i++)
+        for (int i = 0; i < size / 2; i++)
         {
-            pVal[size - 1 - i] = pVal[i];
+            std::swap(pVal[size - 1 - i], pVal[i]);
         }
     }
 }
@@ -229,10 +229,11 @@ public:
             m_map.erase(i);
             i = m_map.end();
         }
-
-        if(i == m_map.end()){
+        else
+        {
             // insert item into the cache, but first check if it is full
-            if(m_map.size() >= m_capacity){
+            if(m_map.size() >= m_capacity)
+            {
                 // cache is full, evict the least recently used item
                 evict();
             }
