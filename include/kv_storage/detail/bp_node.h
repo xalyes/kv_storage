@@ -15,7 +15,7 @@ class BPNode;
 
 //-------------------------------------------------------------------------------
 template<class V, size_t BranchFactor>
-using BPCache = lru_cache<FileIndex, std::shared_ptr<BPNode<V, BranchFactor>>>;
+using BPCache = lfu_cache<FileIndex, std::shared_ptr<BPNode<V, BranchFactor>>>;
 
 //-------------------------------------------------------------------------------
 // ptr to new created BPNode & key to be inserted to parent node

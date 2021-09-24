@@ -5,6 +5,7 @@
 #include <list>
 #include <array>
 #include <optional>
+#include <atomic>
 #include <functional>
 #include <filesystem>
 #include <boost/endian/conversion.hpp>
@@ -13,6 +14,8 @@
 #include <boost/thread/locks.hpp>
 
 namespace fs = std::filesystem;
+
+#undef max
 
 namespace kv_storage {
 
@@ -149,12 +152,12 @@ void LittleToNativeEndianInplace(T& val)
 }
 
 //-------------------------------------------------------------------------------
-//                              lru_cache
+//                              lfu_cache
 //-------------------------------------------------------------------------------
-// a cache which evicts the least recently used item when it is full
+// a cache which evicts the least frequently used item when it is full
 // modified boost cache from boost/compute/detail/lru_cache.hpp
 template<class Key, class Value>
-class lru_cache
+class lfu_cache
 {
 public:
     typedef Key key_type;
@@ -162,16 +165,16 @@ public:
     typedef std::list<key_type> list_type;
     typedef std::map<
                 key_type,
-                std::pair<value_type, typename list_type::iterator>
+                std::pair<value_type, std::atomic_uint32_t>
             > map_type;
 
-    lru_cache(size_t capacity, std::function<void(Value&)> disposer = [](Value& v) {})
+    lfu_cache(size_t capacity, std::function<void(Value&)> disposer = [](Value& v) {})
         : m_capacity(capacity)
         , m_disposer(disposer)
     {
     }
 
-    ~lru_cache()
+    ~lfu_cache()
     {
         try
         {
@@ -212,7 +215,6 @@ public:
         typename map_type::iterator i = m_map.find(key);
         if (i != m_map.end())
         {
-            m_list.erase(i->second.second);
             m_map.erase(i);
             return true;
         }
@@ -225,28 +227,24 @@ public:
         typename map_type::iterator i = m_map.find(key);
         if (i != m_map.end())
         {
-            m_list.erase(i->second.second);
             m_map.erase(i);
             i = m_map.end();
         }
-        else
-        {
-            // insert item into the cache, but first check if it is full
-            if(m_map.size() >= m_capacity)
-            {
-                // cache is full, evict the least recently used item
-                evict();
-            }
 
-            // insert the new item
-            m_list.push_front(key);
-            m_map[key] = std::make_pair(value, m_list.begin());
+        // insert item into the cache, but first check if it is full
+        if(m_map.size() >= m_capacity)
+        {
+            // cache is full, evict the least frequently used item
+            evict();
         }
+
+        // insert the new item
+        m_map[key] = std::make_pair(value, 0U);
     }
 
     std::optional<value_type> get(const key_type &key)
     {
-        boost::unique_lock<boost::shared_mutex> lock(m_mutex);
+        boost::shared_lock<boost::shared_mutex> lock(m_mutex);
         // lookup value in the cache
         typename map_type::iterator i = m_map.find(key);
         if(i == m_map.end()){
@@ -254,25 +252,41 @@ public:
             return std::nullopt;
         }
 
-        // return the value, but first update its place in the most
-        // recently used list
-        typename list_type::iterator j = i->second.second;
-        if(j != m_list.begin()){
-            // move item to the front of the most recently used list
-            m_list.erase(j);
-            m_list.push_front(key);
+        if (i->second.second == std::numeric_limits<uint32_t>::max() - 1)
+        {
+            lock.unlock();
+            boost::unique_lock<boost::shared_mutex> uniqueLock(m_mutex);
 
-            // update iterator in map
-            j = m_list.begin();
-            const value_type &value = i->second.first;
-            m_map[key] = std::make_pair(value, j);
+            typename map_type::iterator newIt = m_map.find(key);
+            if (newIt == m_map.end()) {
+                // value not in cache
+                return std::nullopt;
+            }
 
-            // return the value
-            return value;
+            typename map_type::iterator minIt;
+            for (auto it = m_map.begin(); it != m_map.end(); it++)
+            {
+                if (minIt->second.second > it->second.second)
+                    minIt = it;
+            }
+
+            ++newIt->second.second;
+
+            if (minIt->second.second == 0)
+                return newIt->second.first;
+
+            uint32_t subValue = minIt->second.second;
+            for (auto it = m_map.begin(); it != m_map.end(); it++)
+            {
+                if (it->second.second >= subValue)
+                    it->second.second -= subValue;
+                else
+                    it->second.second = 0;
+            }
+            return newIt->second.first;
         }
-        else {
-            // the item is already at the front of the most recently
-            // used list so just return it
+        else
+        {
             return i->second.first;
         }
     }
@@ -287,24 +301,24 @@ public:
         }
 
         m_map.clear();
-        m_list.clear();
     }
 
 private:
     void evict()
     {
-        // evict item from the end of most recently used list
-        typename list_type::iterator i = --m_list.end();
-        auto it = m_map.find(*i);
-        m_disposer(it->second.first);
+        typename map_type::iterator minIt;
+        for (auto it = m_map.begin(); it != m_map.end(); it++)
+        {
+            if (minIt->second.second > it->second.second)
+                minIt = it;
+        }
 
-        m_map.erase(it);
-        m_list.erase(i);
+        m_disposer(minIt->second.first);
+        m_map.erase(minIt);
     }
 
 private:
     map_type m_map;
-    list_type m_list;
     size_t m_capacity;
     mutable boost::shared_mutex m_mutex;
     std::function<void(Value&)> m_disposer;
